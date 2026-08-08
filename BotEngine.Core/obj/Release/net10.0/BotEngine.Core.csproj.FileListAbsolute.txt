@@ -1,0 +1,12 @@
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\bin\Release\net10.0\BotEngine.Core.deps.json
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\bin\Release\net10.0\BotEngine.Core.dll
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\bin\Release\net10.0\BotEngine.Core.pdb
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\obj\Release\net10.0\BotEngine.Core.csproj.AssemblyReference.cache
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\obj\Release\net10.0\BotEngine.Core.GeneratedMSBuildEditorConfig.editorconfig
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\obj\Release\net10.0\BotEngine.Core.AssemblyInfoInputs.cache
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\obj\Release\net10.0\BotEngine.Core.AssemblyInfo.cs
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\obj\Release\net10.0\BotEngine.Core.csproj.CoreCompileInputs.cache
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\obj\Release\net10.0\BotEngine.Core.dll
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\obj\Release\net10.0\refint\BotEngine.Core.dll
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\obj\Release\net10.0\BotEngine.Core.pdb
+c:\Users\kanl2\source\repos\BotEngine\BotEngine.Core\obj\Release\net10.0\ref\BotEngine.Core.dll

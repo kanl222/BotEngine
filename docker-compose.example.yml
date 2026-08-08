@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  bot-engine-example:
+    build:
+      context: .
+      dockerfile: BotEngine.Example/Dockerfile
+    container_name: bot_engine_example
+    restart: unless-stopped
+    environment:
+      # В .NET переменные окружения с двойным подчеркиванием (__) маппятся в иерархию JSON конфигурации.
+      # Telegram__Token переопределит Telegram:Token из appsettings.json
+      - Telegram__Token=${TELEGRAM_TOKEN}
+      - Max__Token=${MAX_TOKEN}
+      - DOTNET_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      # - ConnectionStrings__Redis=${REDIS_CONNECTION_STRING}
+    # Раскомментируйте depends_on, если планируете использовать Redis
+    # depends_on:
+    #   - redis
+
+
+# volumes:
+#   redis_data:
