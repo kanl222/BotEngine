@@ -1,6 +1,0 @@
-c:\Users\kanl2\source\repos\BotEngine\BotEngine.Telegram\bin\Release\net10.0\publish\BotEngine.Telegram.dll
-c:\Users\kanl2\source\repos\BotEngine\BotEngine.Telegram\bin\Release\net10.0\publish\BotEngine.Telegram.deps.json
-c:\Users\kanl2\source\repos\BotEngine\BotEngine.Telegram\bin\Release\net10.0\publish\BotEngine.Telegram.pdb
-c:\Users\kanl2\source\repos\BotEngine\BotEngine.Telegram\bin\Release\net10.0\publish\Telegram.Bot.dll
-c:\Users\kanl2\source\repos\BotEngine\BotEngine.Telegram\bin\Release\net10.0\publish\BotEngine.Core.dll
-c:\Users\kanl2\source\repos\BotEngine\BotEngine.Telegram\bin\Release\net10.0\publish\BotEngine.Core.pdb
