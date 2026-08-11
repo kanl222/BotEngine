@@ -10,4 +10,10 @@ public record UserDialogState(string AwaitingInputFor)
     /// Возвращает время создания состояния сессии.
     /// </summary>
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Произвольные данные диалога: позволяют передавать состояние между шагами команды.
+    /// Например, сохранить промежуточный ввод пользователя до финального подтверждения.
+    /// </summary>
+    public Dictionary<string, string> Data { get; init; } = new();
 }

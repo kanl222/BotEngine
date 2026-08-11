@@ -3,25 +3,24 @@ using BotEngine.Core.Models;
 
 namespace BotEngine.Example.Commands;
 
+/// <summary>
+/// Команда /start: отправляет приветственное сообщение с Inline-клавиатурой.
+/// </summary>
 public class StartCommand : IBotCommand
 {
+    /// <inheritdoc />
+    public string Name => "start";
+
+    /// <inheritdoc />
     public async Task ExecuteAsync(BotContext context, IncomingMessage message, CancellationToken ct)
     {
-        // Пример отправки клавиатуры (Inline)
-        var keyboard = new BotKeyboard
+        // Пример отправки клавиатуры (Inline) через фабричные методы BotButton
+        var keyboard = BotKeyboard.Grid(new[]
         {
-            Buttons = new List<List<BotButton>>
-            {
-                new()
-                {
-                    new BotButton { Text = "Пинг", CallbackData = "ping:" },
-                    new BotButton { Text = "Эхо", CallbackData = "echo:" }
-                }
-            }
-        };
+            new[] { BotButton.Callback("Пинг 🏓", "ping:"), BotButton.Callback("Эхо 🔁", "echo:") }
+        });
 
-        await context.MessagingPlatform.SendTextAsync(
-            context.ChatId,
+        await context.ReplyAsync(
             "👋 Привет! Я тестовый бот на базе BotEngine.\n\nВыбери команду на клавиатуре или напиши /ping или /echo",
             keyboard: keyboard,
             ct: ct);

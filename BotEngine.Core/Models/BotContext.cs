@@ -11,19 +11,19 @@ public record BotContext(
 {
     // ── Текстовые сообщения ────────────────────────────────────────────────
 
-    public Task ReplyAsync(string text, BotKeyboard? keyboard = null)
-        => MessagingPlatform.SendTextAsync(ChatId, text, keyboard);
+    public Task ReplyAsync(string text, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => MessagingPlatform.SendTextAsync(ChatId, text, keyboard, ct);
 
     // ── Геопозиция ────────────────────────────────────────────────────────
 
-    public Task SendLocationAsync(double latitude, double longitude)
-        => MessagingPlatform.SendLocationAsync(ChatId, latitude, longitude);
+    public Task SendLocationAsync(double latitude, double longitude, CancellationToken ct = default)
+        => MessagingPlatform.SendLocationAsync(ChatId, latitude, longitude, ct);
 
     // ── Фото (по URL или токену) ───────────────────────────────────────────
 
     /// <summary>Отправить изображение по URL или платформенному токену/file_id.</summary>
-    public Task SendPhotoAsync(string photoUrlOrFileId, string? caption = null, BotKeyboard? keyboard = null)
-        => MessagingPlatform.SendPhotoAsync(ChatId, photoUrlOrFileId, caption, keyboard);
+    public Task SendPhotoAsync(string photoUrlOrFileId, string? caption = null, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => MessagingPlatform.SendPhotoAsync(ChatId, photoUrlOrFileId, caption, keyboard, ct);
 
     // ── Файлы ─────────────────────────────────────────────────────────────
 
@@ -32,8 +32,8 @@ public record BotContext(
     /// Платформа сама определяет тип (документ / фото / видео) по MIME-типу и имени.
     /// </summary>
     public Task SendFileAsync(Stream content, string fileName, string? mimeType = null,
-        string? caption = null, BotKeyboard? keyboard = null)
-        => MessagingPlatform.SendFileAsync(ChatId, content, fileName, mimeType, caption, keyboard);
+        string? caption = null, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => MessagingPlatform.SendFileAsync(ChatId, content, fileName, mimeType, caption, keyboard, ct);
 
     /// <summary>
     /// Скачать вложение, полученное от пользователя, и вернуть поток с байтами.
@@ -45,12 +45,12 @@ public record BotContext(
     // ── Редактирование / удаление ──────────────────────────────────────────
 
     /// <summary>Отредактировать сообщение по его идентификатору.</summary>
-    public Task EditAsync(string messageId, string newText, BotKeyboard? keyboard = null)
-        => MessagingPlatform.EditTextAsync(ChatId, messageId, newText, keyboard);
+    public Task EditAsync(string messageId, string newText, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => MessagingPlatform.EditTextAsync(ChatId, messageId, newText, keyboard, ct);
 
     /// <summary>Удалить сообщение по его идентификатору.</summary>
-    public Task DeleteAsync(string messageId)
-        => MessagingPlatform.DeleteMessageAsync(ChatId, messageId);
+    public Task DeleteAsync(string messageId, CancellationToken ct = default)
+        => MessagingPlatform.DeleteMessageAsync(ChatId, messageId, ct);
 
     // ── Сессии ────────────────────────────────────────────────────────────
 
@@ -59,8 +59,8 @@ public record BotContext(
         => Sessions.GetStateAsync(UserId, ct);
 
     /// <summary>Установить состояние диалога для текущего пользователя.</summary>
-    public Task SetSessionAsync(string awaitingInputFor, TimeSpan? ttl = null, CancellationToken ct = default)
-        => Sessions.SetStateAsync(UserId, new UserDialogState(awaitingInputFor), ttl, ct);
+    public Task SetSessionAsync(string awaitingInputFor, Dictionary<string, string>? data = null, TimeSpan? ttl = null, CancellationToken ct = default)
+        => Sessions.SetStateAsync(UserId, new UserDialogState(awaitingInputFor) { Data = data ?? new() }, ttl, ct);
 
     /// <summary>Сбросить (завершить) активный диалог для текущего пользователя.</summary>
     public Task ClearSessionAsync(CancellationToken ct = default)

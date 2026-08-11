@@ -3,11 +3,17 @@ using BotEngine.Core.Models;
 
 namespace BotEngine.Example.Commands;
 
+/// <summary>
+/// Команда /ping: отвечает «Pong! 🏓». Проверяет базовую связность бота.
+/// </summary>
 public class PingCommand : IBotCommand
 {
+    /// <inheritdoc />
+    public string Name => "ping";
+
+    /// <inheritdoc />
     public async Task ExecuteAsync(BotContext context, IncomingMessage message, CancellationToken ct)
     {
-        // Простая команда, возвращающая ответ
-        await context.MessagingPlatform.SendTextAsync(context.ChatId, "Pong! 🏓", ct: ct);
+        await context.ReplyAsync("Pong! 🏓", ct: ct);
     }
 }
