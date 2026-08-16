@@ -12,7 +12,7 @@ builder.Services.AddBotEngine();
 // 2. Регистрируем платформы, которые хотим использовать.
 // Для Telegram нужно добавить "Telegram:Token" в appsettings.json.
 builder.Services.AddTelegram();
-// builder.Services.AddMaxPlatform(); // Раскомментируйте, если есть токен для платформы Max
+// builder.Services.AddMax(); // Раскомментируйте, если есть токен для платформы Max ("Max:Token" в appsettings.json)
 
 // 3. Регистрируем наши команды бота с помощью Keyed DI
 builder.Services.AddKeyedScoped<IBotCommand, StartCommand>("start");

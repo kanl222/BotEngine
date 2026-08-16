@@ -17,7 +17,9 @@ public sealed class InMemoryUserSessionStore : IUserSessionStore, IHostedService
 
     private readonly ConcurrentDictionary<string, Entry> _store = new();
     private readonly ILogger<InMemoryUserSessionStore> _logger;
-    private Timer? _cleanupTimer;
+    private PeriodicTimer? _periodicTimer;
+    private Task? _cleanupTask;
+    private CancellationTokenSource? _cts;
 
     /// <summary>
     /// Инициализирует новый экземпляр <see cref="InMemoryUserSessionStore"/>.
@@ -82,13 +84,26 @@ public sealed class InMemoryUserSessionStore : IUserSessionStore, IHostedService
     /// <returns>Задача запуска службы.</returns>
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _cleanupTimer = new Timer(
-            callback: _ => Cleanup(),
-            state: null,
-            dueTime: TimeSpan.FromMinutes(5),
-            period: TimeSpan.FromMinutes(5));
+        _cts = new CancellationTokenSource();
+        _periodicTimer = new PeriodicTimer(TimeSpan.FromMinutes(5));
+        _cleanupTask = RunCleanupLoopAsync(_cts.Token);
 
         return Task.CompletedTask;
+    }
+
+    private async Task RunCleanupLoopAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            while (await _periodicTimer!.WaitForNextTickAsync(stoppingToken))
+            {
+                Cleanup();
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Нормальное завершение службы
+        }
     }
 
     /// <summary>
@@ -96,16 +111,28 @@ public sealed class InMemoryUserSessionStore : IUserSessionStore, IHostedService
     /// </summary>
     /// <param name="cancellationToken">Токен отмены остановки.</param>
     /// <returns>Задача остановки службы.</returns>
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _cleanupTimer?.Change(Timeout.Infinite, 0);
-        return Task.CompletedTask;
+        if (_cts is not null)
+        {
+            await _cts.CancelAsync();
+        }
+
+        if (_cleanupTask is not null)
+        {
+            await Task.WhenAny(_cleanupTask, Task.Delay(Timeout.Infinite, cancellationToken));
+        }
     }
 
     /// <summary>
     /// Освобождает ресурсы, используемые таймером очистки.
     /// </summary>
-    public void Dispose() => _cleanupTimer?.Dispose();
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _periodicTimer?.Dispose();
+    }
 
     /// <summary>
     /// Проводит ревизию сохраненных сессий и удаляет те, время жизни которых истекло.

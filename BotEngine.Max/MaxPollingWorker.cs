@@ -40,6 +40,8 @@ public sealed class MaxPollingWorker : BackgroundService
         _adapter.OnMessageReceived += HandleMessageAsync;
     }
 
+    private CancellationToken _stoppingToken;
+
     /// <summary>
     /// Обрабатывает входящее платформо-независимое сообщение от пользователя.
     /// </summary>
@@ -51,7 +53,7 @@ public sealed class MaxPollingWorker : BackgroundService
         {
             using var scope = _scopeFactory.CreateScope();
             var dispatcher = scope.ServiceProvider.GetRequiredService<ICommandDispatcher>();
-            await dispatcher.DispatchAsync(message, _adapter);
+            await dispatcher.DispatchAsync(message, _adapter, _stoppingToken);
         }
         catch (Exception ex)
         {
@@ -66,6 +68,7 @@ public sealed class MaxPollingWorker : BackgroundService
     /// <returns>Задача выполнения фоновой службы.</returns>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _stoppingToken = stoppingToken;
         while (!stoppingToken.IsCancellationRequested)
         {
             try

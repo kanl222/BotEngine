@@ -29,7 +29,7 @@ public enum BotButtonType
 /// <summary>
 /// Представляет кнопку на клавиатуре бота.
 /// </summary>
-public sealed record BotButton
+public readonly record struct BotButton
 {
     /// <summary>
     /// Возвращает текст на кнопке.

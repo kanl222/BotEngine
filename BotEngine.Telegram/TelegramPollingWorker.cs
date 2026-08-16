@@ -41,7 +41,7 @@ public sealed class TelegramPollingWorker : BackgroundService
     /// </summary>
     /// <param name="stoppingToken">Токен отмены для остановки воркера.</param>
     /// <returns>Задача выполнения фоновой службы.</returns>
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Запуск фоновой службы Telegram Polling Worker...");
 
@@ -50,7 +50,14 @@ public sealed class TelegramPollingWorker : BackgroundService
             errorHandler: HandleErrorAsync,
             cancellationToken: stoppingToken);
 
-        return Task.CompletedTask;
+        try
+        {
+            await Task.Delay(Timeout.Infinite, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Корректная остановка сервиса
+        }
     }
 
     /// <summary>

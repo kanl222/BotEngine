@@ -55,11 +55,13 @@ dotnet run
 using BotEngine.Core.Interfaces;
 using BotEngine.Core.Models;
 
-public class HelloCommand : IBotCommand
+public sealed class HelloCommand : IBotCommand
 {
-    public async Task ExecuteAsync(BotContext context, IncomingMessage message, CancellationToken ct)
+    public string Name => "hello";
+
+    public async Task ExecuteAsync(BotContext context, IncomingMessage message, CancellationToken ct = default)
     {
-        await context.MessagingPlatform.SendTextAsync(context.ChatId, "Привет, мир!", ct: ct);
+        await context.ReplyAsync("Привет, мир!", ct: ct);
     }
 }
 ```
@@ -73,37 +75,44 @@ builder.Services.AddKeyedScoped<IBotCommand, HelloCommand>("hello");
 
 ## Работа с диалогами (Состояния)
 
-Для построения диалога используйте сервис сессий из `BotContext`. Пример команды, которая спрашивает имя и ждет ответа:
+Для построения диалога используйте методы сессий из `BotContext`. Пример команды, которая спрашивает имя и ждет ответа:
 
 ```csharp
-public async Task ExecuteAsync(BotContext context, IncomingMessage message, CancellationToken ct)
+using BotEngine.Core.Interfaces;
+using BotEngine.Core.Models;
+
+public sealed class AskNameCommand : IBotCommand
 {
-    var state = await context.Sessions.GetStateAsync(context.UserId, ct);
-    
-    if (state == null)
+    public string Name => "ask_name";
+
+    public async Task ExecuteAsync(BotContext context, IncomingMessage message, CancellationToken ct = default)
     {
-        // Начало диалога
-        await context.MessagingPlatform.SendTextAsync(context.ChatId, "Как тебя зовут?", ct: ct);
-        
-        // Переводим пользователя в состояние ожидания ввода
-        // Следующее сообщение будет отправлено в ЭТУ ЖЕ команду
-        await context.Sessions.SetStateAsync(context.UserId, new UserDialogState
+        var state = await context.GetSessionAsync(ct);
+
+        if (state is null)
         {
-            UserId = context.UserId,
-            AwaitingInputFor = "ask_name" // Ключ этой команды
-        }, ct);
-    }
-    else
-    {
-        // Продолжение диалога
-        string name = message.Text;
-        await context.MessagingPlatform.SendTextAsync(context.ChatId, $"Приятно познакомиться, {name}!", ct: ct);
-        
-        // Очищаем состояние
-        await context.Sessions.ClearStateAsync(context.UserId, ct);
+            // Начало диалога: переводим пользователя в состояние ожидания ввода
+            await context.ReplyAsync("Как тебя зовут?", ct: ct);
+            await context.SetSessionAsync("ask_name", ct: ct);
+        }
+        else
+        {
+            // Продолжение диалога: обрабатываем ввод и очищаем сессию
+            var name = message.Text;
+            await context.ReplyAsync($"Приятно познакомиться, {name}!", ct: ct);
+            await context.ClearSessionAsync(ct);
+        }
     }
 }
 ```
+
+## Архитектурные решения (ADR)
+
+Ключевые технические решения задокументированы в формате [Architecture Decision Records](docs/decisions/):
+
+- [ADR-001: Platform-Agnostic Architecture (Ports & Adapters)](docs/decisions/ADR-001-Platform-Agnostic-Architecture.md)
+- [ADR-002: Keyed Scoped DI and Command Dispatcher Pipeline](docs/decisions/ADR-002-Keyed-DI-Command-Routing.md)
+- [ADR-003: Finite State Machine (FSM) and User Session Storage](docs/decisions/ADR-003-Finite-State-Machine-Session-Storage.md)
 
 ## Запуск в Docker (с поддержкой сертификатов Минцифры РФ)
 

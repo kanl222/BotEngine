@@ -22,7 +22,7 @@ public static class DependencyInjection
     /// </summary>
     public static IServiceCollection AddBotEngine(this IServiceCollection services)
     {
-        services.AddSingleton<ICommandFactory, CommandFactory>();
+        services.AddScoped<ICommandFactory, CommandFactory>();
 
         // CommandDispatcher — Scoped: каждый входящий запрос обрабатывается в своём scope
         services.AddScoped<ICommandDispatcher, CommandDispatcher>();

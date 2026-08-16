@@ -129,7 +129,7 @@ public sealed class CommandDispatcher : ICommandDispatcher
                 command.Name, message.Platform, message.UserId);
             try
             {
-                await context.ReplyAsync("Произошла внутренняя ошибка. Попробуйте позже.");
+                await context.ReplyAsync("Произошла внутренняя ошибка. Попробуйте позже.", ct: ct);
             }
             catch
             {

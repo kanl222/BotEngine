@@ -4,7 +4,7 @@ namespace BotEngine.Core.Models;
 /// Представляет состояние активного диалога пользователя (ожидание ввода).
 /// </summary>
 /// <param name="AwaitingInputFor">Имя команды, ожидающей ввода от пользователя.</param>
-public record UserDialogState(string AwaitingInputFor)
+public readonly record struct UserDialogState(string AwaitingInputFor)
 {
     /// <summary>
     /// Возвращает время создания состояния сессии.

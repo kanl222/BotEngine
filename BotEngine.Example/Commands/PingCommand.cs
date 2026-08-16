@@ -3,11 +3,12 @@ using BotEngine.Core.Models;
 
 namespace BotEngine.Example.Commands;
 
-public class PingCommand : IBotCommand
+public sealed class PingCommand : IBotCommand
 {
-    public async Task ExecuteAsync(BotContext context, IncomingMessage message, CancellationToken ct)
+    public string Name => "ping";
+
+    public async Task ExecuteAsync(BotContext context, IncomingMessage message, CancellationToken ct = default)
     {
-        // Простая команда, возвращающая ответ
-        await context.MessagingPlatform.SendTextAsync(context.ChatId, "Pong! 🏓", ct: ct);
+        await context.ReplyAsync("Pong! 🏓", ct: ct);
     }
 }
