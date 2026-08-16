@@ -3,10 +3,17 @@ using BotEngine.Core.Models;
 
 namespace BotEngine.Example.Commands;
 
+/// <summary>
+/// Команда /echo: демонстрирует двухшаговый диалог с сохранением состояния через <see cref="UserDialogState"/>.
+/// Шаг 1: запрашивает текст у пользователя.
+/// Шаг 2: повторяет введённый текст и завершает диалог.
+/// </summary>
 public sealed class EchoCommand : IBotCommand
 {
+    /// <inheritdoc />
     public string Name => "echo";
 
+    /// <inheritdoc />
     public async Task ExecuteAsync(BotContext context, IncomingMessage message, CancellationToken ct = default)
     {
         // Проверяем, есть ли уже активная сессия для этого пользователя
@@ -14,13 +21,15 @@ public sealed class EchoCommand : IBotCommand
 
         if (state is null)
         {
-            // Шаг 1: Запрашиваем ввод и устанавливаем состояние
+            // Шаг 1: запрашиваем ввод и сохраняем состояние
             await context.ReplyAsync("Что мне тебе ответить? Напиши любое сообщение:", ct: ct);
-            await context.SetSessionAsync("echo", ct: ct);
+
+            // Указываем ключ команды, которая будет обрабатывать следующий ввод
+            await context.SetSessionAsync(Name, ct: ct);
         }
         else
         {
-            // Шаг 2: Обрабатываем полученный ввод и очищаем состояние
+            // Шаг 2: обрабатываем полученный ввод и очищаем состояние
             var text = string.IsNullOrWhiteSpace(message.Text) ? "[пустое сообщение]" : message.Text;
 
             await context.ReplyAsync($"Ты сказал: {text}", ct: ct);

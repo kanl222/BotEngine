@@ -59,8 +59,8 @@ public record BotContext(
         => Sessions.GetStateAsync(UserId, ct);
 
     /// <summary>Установить состояние диалога для текущего пользователя.</summary>
-    public Task SetSessionAsync(string awaitingInputFor, TimeSpan? ttl = null, CancellationToken ct = default)
-        => Sessions.SetStateAsync(UserId, new UserDialogState(awaitingInputFor), ttl, ct);
+    public Task SetSessionAsync(string awaitingInputFor, Dictionary<string, string>? data = null, TimeSpan? ttl = null, CancellationToken ct = default)
+        => Sessions.SetStateAsync(UserId, new UserDialogState(awaitingInputFor) { Data = data ?? new() }, ttl, ct);
 
     /// <summary>Сбросить (завершить) активный диалог для текущего пользователя.</summary>
     public Task ClearSessionAsync(CancellationToken ct = default)
