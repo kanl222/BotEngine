@@ -74,9 +74,9 @@ public sealed class CommandDispatcher : ICommandDispatcher
 
         // 2. Проверка активных сессий пользователя
         var sessionState = await _sessions.GetStateAsync(message.UserId, ct);
-        if (sessionState is not null)
+        if (sessionState is { } state)
         {
-            var sessionCommandKey = sessionState.AwaitingInputFor.Trim().ToLowerInvariant();
+            var sessionCommandKey = state.AwaitingInputFor.Trim().ToLowerInvariant();
             var sessionCommand = _factory.Resolve(sessionCommandKey);
             if (sessionCommand is not null)
             {

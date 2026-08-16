@@ -50,7 +50,7 @@ public sealed class RedisUserSessionStore : IUserSessionStore
             if (raw.IsNullOrEmpty)
                 return null;
 
-            return JsonSerializer.Deserialize<UserDialogState>(raw!, JsonOpts);
+            return JsonSerializer.Deserialize<UserDialogState>((string)raw!, JsonOpts);
         }
         catch (Exception ex)
         {
