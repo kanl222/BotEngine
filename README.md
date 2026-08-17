@@ -106,14 +106,6 @@ public sealed class AskNameCommand : IBotCommand
 }
 ```
 
-## Архитектурные решения (ADR)
-
-Ключевые технические решения задокументированы в формате [Architecture Decision Records](docs/decisions/):
-
-- [ADR-001: Platform-Agnostic Architecture (Ports & Adapters)](docs/decisions/ADR-001-Platform-Agnostic-Architecture.md)
-- [ADR-002: Keyed Scoped DI and Command Dispatcher Pipeline](docs/decisions/ADR-002-Keyed-DI-Command-Routing.md)
-- [ADR-003: Finite State Machine (FSM) and User Session Storage](docs/decisions/ADR-003-Finite-State-Machine-Session-Storage.md)
-
 ## Запуск в Docker (с поддержкой сертификатов Минцифры РФ)
 
 Проект полностью готов к деплою через Docker. В корне репозитория находятся файлы `.env.example`, `docker-compose.example.yml` и `Dockerfile` в проекте `BotEngine.Example`.
