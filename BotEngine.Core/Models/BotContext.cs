@@ -46,7 +46,15 @@ public record BotContext(
 
     /// <summary>Отредактировать сообщение по его идентификатору.</summary>
     public Task EditAsync(string messageId, string newText, BotKeyboard? keyboard = null, CancellationToken ct = default)
-        => MessagingPlatform.EditTextAsync(ChatId, messageId, newText, keyboard, ct);
+        => MessagingPlatform.EditMessageAsync(ChatId, messageId, newText, keyboard, ct);
+
+    /// <summary>Отредактировать текст и клавиатуру сообщения по его идентификатору.</summary>
+    public Task EditMessageAsync(string messageId, string newText, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => MessagingPlatform.EditMessageAsync(ChatId, messageId, newText, keyboard, ct);
+
+    /// <summary>Отредактировать только inline-клавиатуру сообщения по его идентификатору.</summary>
+    public Task EditMessageReplyMarkupAsync(string messageId, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => MessagingPlatform.EditMessageReplyMarkupAsync(ChatId, messageId, keyboard, ct);
 
     /// <summary>Удалить сообщение по его идентификатору.</summary>
     public Task DeleteAsync(string messageId, CancellationToken ct = default)

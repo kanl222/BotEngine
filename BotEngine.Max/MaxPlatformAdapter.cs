@@ -203,7 +203,107 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
         }
     }
 
-    // ── Файлы: скачивание ─────────────────────────────────────────────────
+    // ── Редактирование ────────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public Task EditTextAsync(string chatId, string messageId, string newText,
+        BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => EditMessageAsync(chatId, messageId, newText, keyboard, ct);
+
+    /// <inheritdoc/>
+    public async Task EditMessageAsync(string chatId, string messageId, string newText,
+        BotKeyboard? keyboard = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(messageId))
+        {
+            _logger.LogError("Некорректный messageId для редактирования");
+            return;
+        }
+
+        long.TryParse(chatId, out var chatIdLong);
+
+        var request = new SendMessageRequest
+        {
+            ChatId = chatIdLong != 0 ? chatIdLong : null,
+            Text = newText,
+            Format = MessageFormat.Markdown,
+            Attachments = keyboard is not null
+                ? new List<Attachment> { ButtonMapper.ToInlineKeyboardAttachment(keyboard) }
+                : null
+        };
+
+        try
+        {
+            await _client.Messages.EditMessageByIdAsync(messageId, request, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ошибка редактирования сообщения с Markdown. Повтор без разметки.");
+            try
+            {
+                request.Format = null;
+                await _client.Messages.EditMessageByIdAsync(messageId, request, cancellationToken: ct);
+            }
+            catch (Exception innerEx)
+            {
+                _logger.LogError(innerEx, "Не удалось отредактировать сообщение {MessageId} в чате {ChatId}", messageId, chatId);
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task EditMessageReplyMarkupAsync(string chatId, string messageId,
+        BotKeyboard? keyboard = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(messageId))
+        {
+            _logger.LogError("Некорректный messageId для редактирования кнопок");
+            return;
+        }
+
+        try
+        {
+            var msg = await _client.Messages.GetMessageByIdAsync(messageId, ct);
+            long.TryParse(chatId, out var chatIdLong);
+
+            var request = new SendMessageRequest
+            {
+                ChatId = chatIdLong != 0 ? chatIdLong : null,
+                Text = msg.Body?.Text,
+                Attachments = keyboard is not null
+                    ? new List<Attachment> { ButtonMapper.ToInlineKeyboardAttachment(keyboard) }
+                    : null
+            };
+
+            await _client.Messages.EditMessageByIdAsync(messageId, request, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при редактировании кнопок сообщения {MessageId} в чате {ChatId}", messageId, chatId);
+        }
+    }
+
+    // ── Удаление ──────────────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task DeleteMessageAsync(string chatId, string messageId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(messageId))
+        {
+            _logger.LogError("Некорректный messageId для удаления");
+            return;
+        }
+
+        try
+        {
+            await _client.Messages.DeleteMessageByIdAsync(messageId, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при удалении сообщения {MessageId} из чата {ChatId}", messageId, chatId);
+        }
+    }
+
 
     /// <inheritdoc/>
     /// <remarks>

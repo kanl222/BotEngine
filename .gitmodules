@@ -1,0 +1,3 @@
+[submodule "external/max-bot-dotnet"]
+	path = external/max-bot-dotnet
+	url = https://github.com/kanl222/max-bot-dotnet.git
