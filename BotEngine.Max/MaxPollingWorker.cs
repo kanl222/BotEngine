@@ -14,10 +14,25 @@ namespace BotEngine.Max;
 /// </summary>
 public sealed class MaxPollingWorker : BackgroundService
 {
+    /// <summary>
+    /// Список типов обновлений, на которые подписан воркер. Вынесен в статическое поле,
+    /// чтобы не пересоздавать коллекцию на каждой итерации цикла опроса.
+    /// </summary>
+    private static readonly List<string> SubscribedUpdateTypes = new()
+    {
+        UpdateTypes.MessageCreated,
+        UpdateTypes.MessageCallback,
+        UpdateTypes.BotStarted
+    };
+
+    private static readonly TimeSpan MinReconnectDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaxReconnectDelay = TimeSpan.FromMinutes(1);
+
     private readonly IMaxBotClient _client;
     private readonly MaxPlatformAdapter _adapter;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<MaxPollingWorker> _logger;
+    private CancellationToken _stoppingToken;
 
     /// <summary>
     /// Инициализирует новый экземпляр <see cref="MaxPollingWorker"/>.
@@ -40,8 +55,6 @@ public sealed class MaxPollingWorker : BackgroundService
         _adapter.OnMessageReceived += HandleMessageAsync;
     }
 
-    private CancellationToken _stoppingToken;
-
     /// <summary>
     /// Обрабатывает входящее платформо-независимое сообщение от пользователя.
     /// </summary>
@@ -53,11 +66,15 @@ public sealed class MaxPollingWorker : BackgroundService
         {
             using var scope = _scopeFactory.CreateScope();
             var dispatcher = scope.ServiceProvider.GetRequiredService<ICommandDispatcher>();
-            await dispatcher.DispatchAsync(message, _adapter, _stoppingToken);
+            await dispatcher.DispatchAsync(message, _adapter, _stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Сервис останавливается — не считаем это ошибкой обработки команды.
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Ошибка при выполнении команды (Platform=Max)");
+            _logger.LogError(ex, "Ошибка при выполнении команды (Platform=Max, ChatId={ChatId})", message.ChatId);
         }
     }
 
@@ -69,21 +86,21 @@ public sealed class MaxPollingWorker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _stoppingToken = stoppingToken;
+        var reconnectDelay = MinReconnectDelay;
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 await _client.Updates.PollUpdatesWithCallback(
-                    callback: async (update, client) => await _adapter.HandleUpdateAsync(update),
+                    callback: async (update, client) => await _adapter.HandleUpdateAsync(update, stoppingToken).ConfigureAwait(false),
                     limit: 100,
                     timeout: 90,
-                    types: new List<string>
-                    {
-                        UpdateTypes.MessageCreated,
-                        UpdateTypes.MessageCallback,
-                        UpdateTypes.BotStarted
-                    },
-                    cancellationToken: stoppingToken);
+                    types: SubscribedUpdateTypes,
+                    cancellationToken: stoppingToken).ConfigureAwait(false);
+
+                // Успешный цикл опроса — сбрасываем задержку переподключения.
+                reconnectDelay = MinReconnectDelay;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -91,16 +108,27 @@ public sealed class MaxPollingWorker : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка соединения MAX API в Polling Worker. Повтор через 5 секунд...");
+                _logger.LogError(ex, "Ошибка соединения MAX API в Polling Worker. Повтор через {Delay}...", reconnectDelay);
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                    await Task.Delay(reconnectDelay, stoppingToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     break;
                 }
+
+                // Экспоненциальный backoff с ограничением сверху, чтобы не заваливать API
+                // запросами при продолжительной недоступности, но и не ждать бесконечно долго.
+                reconnectDelay = TimeSpan.FromSeconds(Math.Min(reconnectDelay.TotalSeconds * 2, MaxReconnectDelay.TotalSeconds));
             }
         }
+    }
+
+    /// <inheritdoc/>
+    public override void Dispose()
+    {
+        _adapter.OnMessageReceived -= HandleMessageAsync;
+        base.Dispose();
     }
 }

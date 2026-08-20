@@ -3,7 +3,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Telegram.Bot;
+using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
 
 namespace BotEngine.Telegram;
 
@@ -12,6 +14,16 @@ namespace BotEngine.Telegram;
 /// </summary>
 public sealed class TelegramPollingWorker : BackgroundService
 {
+    /// <summary>
+    /// Типы обновлений, которые реально обрабатываются в <see cref="TelegramPlatformAdapter.MapUpdate"/>.
+    /// Ограничение списка на стороне Telegram API снижает объём трафика и лишнюю нагрузку на
+    /// обработчик — сервер не присылает обновления типов, которые всё равно были бы отброшены.
+    /// </summary>
+    private static readonly ReceiverOptions ReceiverOptions = new()
+    {
+        AllowedUpdates = new[] { UpdateType.Message, UpdateType.CallbackQuery }
+    };
+
     private readonly ITelegramBotClient _client;
     private readonly TelegramPlatformAdapter _adapter;
     private readonly IServiceScopeFactory _scopeFactory;
@@ -45,14 +57,23 @@ public sealed class TelegramPollingWorker : BackgroundService
     {
         _logger.LogInformation("Запуск фоновой службы Telegram Polling Worker...");
 
-        _client.StartReceiving(
-            updateHandler: HandleUpdateAsync,
-            errorHandler: HandleErrorAsync,
-            cancellationToken: stoppingToken);
+        try
+        {
+            _client.StartReceiving(
+                updateHandler: HandleUpdateAsync,
+                errorHandler: HandleErrorAsync,
+                receiverOptions: ReceiverOptions,
+                cancellationToken: stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "Не удалось запустить Telegram Polling Worker");
+            throw;
+        }
 
         try
         {
-            await Task.Delay(Timeout.Infinite, stoppingToken);
+            await Task.Delay(Timeout.Infinite, stoppingToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -75,16 +96,22 @@ public sealed class TelegramPollingWorker : BackgroundService
             if (incoming is null)
                 return;
 
-            await _adapter.AcknowledgeCallbackAsync(update);
+            // Подтверждаем callback как можно раньше, чтобы у пользователя быстрее пропал
+            // индикатор ожидания на кнопке — не дожидаясь завершения диспетчеризации команды.
+            await _adapter.AcknowledgeCallbackAsync(update).ConfigureAwait(false);
 
             using var scope = _scopeFactory.CreateScope();
             var dispatcher = scope.ServiceProvider.GetRequiredService<ICommandDispatcher>();
 
-            await dispatcher.DispatchAsync(incoming, _adapter, ct);
+            await dispatcher.DispatchAsync(incoming, _adapter, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Сервис останавливается — не считаем это ошибкой обработки обновления.
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Ошибка при обработке обновления Telegram");
+            _logger.LogError(ex, "Ошибка при обработке обновления Telegram (UpdateId={UpdateId})", update.Id);
         }
     }
 

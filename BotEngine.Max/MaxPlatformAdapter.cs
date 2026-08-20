@@ -1,3 +1,4 @@
+using System.Linq;
 using BotEngine.Core.Interfaces;
 using BotEngine.Core.Models;
 using BotEngine.Max.Mapping;
@@ -43,39 +44,21 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
     /// </remarks>
     public async Task SendTextAsync(string chatId, string text, BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0)
-        {
-            _logger.LogError("Некорректный chatId");
+        if (!TryParseChatId(chatId, out var chatIdLong, "отправки сообщения"))
             return;
-        }
 
         var request = new SendMessageRequest
         {
             ChatId = chatIdLong,
             Text = text,
-            Format = MessageFormat.Markdown,
-            Attachments = keyboard is not null
-                ? new List<Attachment> { ButtonMapper.ToInlineKeyboardAttachment(keyboard) }
-                : null
+            Attachments = BuildAttachmentList(null, keyboard)
         };
 
-        try
-        {
-            await _client.Messages.SendMessageAsync(request, cancellationToken: ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Ошибка отправки сообщения с Markdown. Повтор без разметки.");
-            try
-            {
-                request.Format = null;
-                await _client.Messages.SendMessageAsync(request, cancellationToken: ct);
-            }
-            catch (Exception innerEx)
-            {
-                _logger.LogError(innerEx, "Не удалось отправить сообщение даже без Markdown");
-            }
-        }
+        await SendWithMarkdownFallbackAsync(
+            request,
+            (req, token) => _client.Messages.SendMessageAsync(req, cancellationToken: token),
+            "отправки сообщения",
+            ct).ConfigureAwait(false);
     }
 
     // ── Геопозиция ────────────────────────────────────────────────────────
@@ -83,28 +66,22 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
     /// <inheritdoc/>
     public async Task SendLocationAsync(string chatId, double latitude, double longitude, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0)
-        {
-            _logger.LogError("Некорректный chatId для отправки геопозиции");
+        if (!TryParseChatId(chatId, out var chatIdLong, "отправки геопозиции"))
             return;
-        }
 
         var request = new SendMessageRequest
         {
             ChatId = chatIdLong,
-            Attachments = new List<Attachment>
-            {
-                new LocationAttachment(latitude, longitude)
-            }
+            Attachments = new List<Attachment> { new LocationAttachment(latitude, longitude) }
         };
 
         try
         {
-            await _client.Messages.SendMessageAsync(request, cancellationToken: ct);
+            await _client.Messages.SendMessageAsync(request, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Ошибка при отправке геопозиции");
+            _logger.LogError(ex, "Ошибка при отправке геопозиции в чат {ChatId}", chatId);
         }
     }
 
@@ -114,31 +91,22 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
     public async Task SendPhotoAsync(string chatId, string photoUrlOrFileId, string? caption = null,
         BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0)
-        {
-            _logger.LogError("Некорректный chatId для отправки фото");
+        if (!TryParseChatId(chatId, out var chatIdLong, "отправки фото"))
             return;
-        }
 
-        var attachments = new List<Attachment>
-        {
-            new ImageAttachment { Payload = new ImagePayload { Url = photoUrlOrFileId } }
-        };
-
-        if (keyboard is not null)
-            attachments.Add(ButtonMapper.ToInlineKeyboardAttachment(keyboard));
+        var primary = new ImageAttachment { Payload = new ImagePayload { Url = photoUrlOrFileId } };
 
         var request = new SendMessageRequest
         {
             ChatId = chatIdLong,
             Text = caption,
             Format = caption is not null ? MessageFormat.Markdown : null,
-            Attachments = attachments
+            Attachments = BuildAttachmentList(primary, keyboard)
         };
 
         try
         {
-            await _client.Messages.SendMessageAsync(request, cancellationToken: ct);
+            await _client.Messages.SendMessageAsync(request, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -159,11 +127,8 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
     public async Task SendFileAsync(string chatId, Stream content, string fileName, string? mimeType = null,
         string? caption = null, BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0)
-        {
-            _logger.LogError("Некорректный chatId для отправки файла");
+        if (!TryParseChatId(chatId, out var chatIdLong, "отправки файла"))
             return;
-        }
 
         try
         {
@@ -177,25 +142,21 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
                 Content = content,
                 FileName = fileName,
                 ContentType = mimeType
-            }, ct);
+            }, ct).ConfigureAwait(false);
 
             _logger.LogDebug("Файл '{FileName}' загружен, токен: {Token}", fileName, token);
 
-            var attachment = BuildAttachmentFromToken(uploadType, token, fileName);
-
-            var attachments = new List<Attachment> { attachment };
-            if (keyboard is not null)
-                attachments.Add(ButtonMapper.ToInlineKeyboardAttachment(keyboard));
+            var primary = BuildAttachmentFromToken(uploadType, token, fileName);
 
             var request = new SendMessageRequest
             {
                 ChatId = chatIdLong,
                 Text = caption,
                 Format = caption is not null ? MessageFormat.Markdown : null,
-                Attachments = attachments
+                Attachments = BuildAttachmentList(primary, keyboard)
             };
 
-            await _client.Messages.SendMessageAsync(request, cancellationToken: ct);
+            await _client.Messages.SendMessageAsync(request, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -220,38 +181,33 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
             return;
         }
 
-        long.TryParse(chatId, out var chatIdLong);
+        // chatId для операции редактирования не строго обязателен: MAX API
+        // позволяет редактировать сообщение по одному лишь messageId, поэтому
+        // при ошибке парсинга просто продолжаем без него, а не прерываем операцию.
+        var hasChatId = long.TryParse(chatId, out var chatIdLong) && chatIdLong != 0;
+        if (!hasChatId)
+            _logger.LogDebug("chatId '{ChatId}' не распознан, редактирование выполняется только по messageId", chatId);
 
         var request = new SendMessageRequest
         {
-            ChatId = chatIdLong != 0 ? chatIdLong : null,
+            ChatId = hasChatId ? chatIdLong : null,
             Text = newText,
-            Format = MessageFormat.Markdown,
-            Attachments = keyboard is not null
-                ? new List<Attachment> { ButtonMapper.ToInlineKeyboardAttachment(keyboard) }
-                : null
+            Attachments = BuildAttachmentList(null, keyboard)
         };
 
-        try
-        {
-            await _client.Messages.EditMessageByIdAsync(messageId, request, cancellationToken: ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Ошибка редактирования сообщения с Markdown. Повтор без разметки.");
-            try
-            {
-                request.Format = null;
-                await _client.Messages.EditMessageByIdAsync(messageId, request, cancellationToken: ct);
-            }
-            catch (Exception innerEx)
-            {
-                _logger.LogError(innerEx, "Не удалось отредактировать сообщение {MessageId} в чате {ChatId}", messageId, chatId);
-            }
-        }
+        await SendWithMarkdownFallbackAsync(
+            request,
+            (req, token) => _client.Messages.EditMessageByIdAsync(messageId, req, cancellationToken: token),
+            $"редактирования сообщения {messageId}",
+            ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Подгружает текущее сообщение, чтобы сохранить его текст и уже существующие
+    /// вложения (например, фото или файл), заменяя только клавиатуру. Это предотвращает
+    /// случайную потерю медиа-вложений при изменении одних лишь кнопок.
+    /// </remarks>
     public async Task EditMessageReplyMarkupAsync(string chatId, string messageId,
         BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
@@ -263,19 +219,28 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
 
         try
         {
-            var msg = await _client.Messages.GetMessageByIdAsync(messageId, ct);
-            long.TryParse(chatId, out var chatIdLong);
+            var msg = await _client.Messages.GetMessageByIdAsync(messageId, ct).ConfigureAwait(false);
+            var hasChatId = long.TryParse(chatId, out var chatIdLong) && chatIdLong != 0;
+
+            var keyboardAttachment = keyboard is not null ? ButtonMapper.ToInlineKeyboardAttachment(keyboard) : null;
+
+            // Сохраняем все вложения, кроме предыдущей клавиатуры (определяется по имени типа,
+            // т.к. конкретный класс инлайн-клавиатуры не типизирован публично в этом контексте).
+            var attachments = (msg.Body?.Attachments ?? Enumerable.Empty<Attachment>())
+                .Where(a => !a.GetType().Name.Contains("Keyboard", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (keyboardAttachment is not null)
+                attachments.Add(keyboardAttachment);
 
             var request = new SendMessageRequest
             {
-                ChatId = chatIdLong != 0 ? chatIdLong : null,
+                ChatId = hasChatId ? chatIdLong : null,
                 Text = msg.Body?.Text,
-                Attachments = keyboard is not null
-                    ? new List<Attachment> { ButtonMapper.ToInlineKeyboardAttachment(keyboard) }
-                    : null
+                Attachments = attachments.Count > 0 ? attachments : null
             };
 
-            await _client.Messages.EditMessageByIdAsync(messageId, request, cancellationToken: ct);
+            await _client.Messages.EditMessageByIdAsync(messageId, request, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -296,14 +261,13 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
 
         try
         {
-            await _client.Messages.DeleteMessageByIdAsync(messageId, cancellationToken: ct);
+            await _client.Messages.DeleteMessageByIdAsync(messageId, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Ошибка при удалении сообщения {MessageId} из чата {ChatId}", messageId, chatId);
         }
     }
-
 
     /// <inheritdoc/>
     /// <remarks>
@@ -315,14 +279,14 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
     {
         ArgumentNullException.ThrowIfNull(file);
 
-        // Пытаемся получить URL для скачивания через MAX SDK
-        // Для этого нужно восстановить объект Attachment из BotFile
+        // Пытаемся получить URL для скачивания через MAX SDK.
+        // Для этого нужно восстановить объект Attachment из BotFile.
         var attachment = ReconstructAttachment(file);
 
         var result = await _client.Attachments.DownloadAttachmentAsync(
             attachment,
             options: null,
-            cancellationToken: ct);
+            cancellationToken: ct).ConfigureAwait(false);
 
         if (result.Content is { Length: > 0 })
             return new MemoryStream(result.Content);
@@ -341,7 +305,7 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
     /// </summary>
     /// <param name="update">Объект входящего обновления.</param>
     /// <returns>Задача обработки обновления.</returns>
-    public async Task HandleUpdateAsync(Update update)
+    public async Task HandleUpdateAsync(Update update, CancellationToken ct = default)
     {
         try
         {
@@ -350,7 +314,7 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
                 return;
 
             if (OnMessageReceived is { } handler)
-                await handler.Invoke(incoming);
+                await handler.Invoke(incoming).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -370,28 +334,10 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
         return update switch
         {
             MessageCreatedUpdate created when created.Message?.Recipient is { ChatId: var chatId } =>
-                new IncomingMessage(
-                    ChatId: chatId.ToString(),
-                    UserId: created.Message.Sender?.Id.ToString() ?? chatId.ToString(),
-                    Text: created.Message.Body?.Text ?? string.Empty,
-                    CallbackData: null,
-                    Platform: "Max",
-                    MessageId: created.Message.Body?.Mid)
-                {
-                    Files = MapAttachments(created.Message.Body?.Attachments)
-                },
+                BuildIncomingMessage(created.Message, chatId),
 
             MessageEditedUpdate edited when edited.Message?.Recipient is { ChatId: var chatId } =>
-                new IncomingMessage(
-                    ChatId: chatId.ToString(),
-                    UserId: edited.Message.Sender?.Id.ToString() ?? chatId.ToString(),
-                    Text: edited.Message.Body?.Text ?? string.Empty,
-                    CallbackData: null,
-                    Platform: "Max",
-                    MessageId: edited.Message.Body?.Mid)
-                {
-                    Files = MapAttachments(edited.Message.Body?.Attachments)
-                },
+                BuildIncomingMessage(edited.Message, chatId),
 
             MessageCallbackUpdate callbackUpdate when callbackUpdate.Callback?.Payload is { } payload =>
                 new IncomingMessage(
@@ -416,7 +362,89 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
         };
     }
 
+    /// <summary>
+    /// Строит <see cref="IncomingMessage"/> из объекта сообщения MAX API (общая логика
+    /// для событий создания и редактирования сообщения).
+    /// </summary>
+    private static IncomingMessage BuildIncomingMessage(Message? message, long chatId) =>
+        new IncomingMessage(
+            ChatId: chatId.ToString(),
+            UserId: message?.Sender?.Id.ToString() ?? chatId.ToString(),
+            Text: message?.Body?.Text ?? string.Empty,
+            CallbackData: null,
+            Platform: "Max",
+            MessageId: message?.Body?.Mid)
+        {
+            Files = MapAttachments(message?.Body?.Attachments)
+        };
+
     // ── Вспомогательные методы ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Разбирает строковый идентификатор чата в числовой формат MAX API, логируя ошибку при неудаче.
+    /// </summary>
+    /// <param name="chatId">Строковый идентификатор чата.</param>
+    /// <param name="chatIdLong">Разобранный числовой идентификатор.</param>
+    /// <param name="operation">Название операции для сообщения об ошибке.</param>
+    /// <returns><c>true</c>, если идентификатор успешно разобран.</returns>
+    private bool TryParseChatId(string chatId, out long chatIdLong, string operation)
+    {
+        if (long.TryParse(chatId, out chatIdLong) && chatIdLong != 0)
+            return true;
+
+        _logger.LogError("Некорректный chatId для {Operation}", operation);
+        return false;
+    }
+
+    /// <summary>
+    /// Формирует список вложений сообщения из основного вложения (например, фото или файла)
+    /// и, опционально, инлайн-клавиатуры.
+    /// </summary>
+    private static List<Attachment>? BuildAttachmentList(Attachment? primary, BotKeyboard? keyboard)
+    {
+        if (primary is null && keyboard is null)
+            return null;
+
+        var attachments = new List<Attachment>(capacity: 2);
+        if (primary is not null)
+            attachments.Add(primary);
+        if (keyboard is not null)
+            attachments.Add(ButtonMapper.ToInlineKeyboardAttachment(keyboard));
+
+        return attachments;
+    }
+
+    /// <summary>
+    /// Выполняет отправку/редактирование сообщения с Markdown-разметкой и, в случае ошибки,
+    /// повторяет операцию без разметки. Общая логика для <see cref="SendTextAsync"/> и
+    /// <see cref="EditMessageAsync"/>.
+    /// </summary>
+    private async Task SendWithMarkdownFallbackAsync(
+        SendMessageRequest request,
+        Func<SendMessageRequest, CancellationToken, Task> action,
+        string operationName,
+        CancellationToken ct)
+    {
+        request.Format = MessageFormat.Markdown;
+
+        try
+        {
+            await action(request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ошибка {Operation} с Markdown. Повтор без разметки.", operationName);
+            try
+            {
+                request.Format = null;
+                await action(request, ct).ConfigureAwait(false);
+            }
+            catch (Exception innerEx)
+            {
+                _logger.LogError(innerEx, "Не удалось выполнить {Operation} даже без Markdown", operationName);
+            }
+        }
+    }
 
     /// <summary>
     /// Преобразует коллекцию низкоуровневых вложений MAX API в список <see cref="BotFile"/>.
@@ -443,7 +471,7 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
                 ImageAttachment ia => new BotFile(
                     FileId: ia.Payload.Token ?? ia.Payload.Url ?? string.Empty,
                     FileName: null,
-                    MimeType: "image/jpeg",
+                    MimeType: GuessMimeType(ia.Payload.Url, "image/jpeg"),
                     FileType: BotFileType.Photo,
                     Url: ia.Payload.Url),
 
@@ -466,6 +494,28 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
                 result.Add(botFile);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Пытается уточнить MIME-тип по расширению в URL, возвращая значение по умолчанию,
+    /// если расширение не распознано или URL отсутствует.
+    /// </summary>
+    private static string GuessMimeType(string? url, string defaultMimeType)
+    {
+        if (string.IsNullOrEmpty(url))
+            return defaultMimeType;
+
+        var ext = Path.GetExtension(url).ToLowerInvariant();
+        return ext switch
+        {
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp" => "image/bmp",
+            ".heic" => "image/heic",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            _ => defaultMimeType
+        };
     }
 
     /// <summary>

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
 
 namespace BotEngine.Telegram;
 
@@ -32,7 +33,16 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     }
 
     /// <inheritdoc />
-#pragma warning disable CS0067 // Событие вызывается извне через MapUpdate в TelegramPollingWorker
+    /// <remarks>
+    /// Это событие никогда не вызывается изнутри адаптера: <see cref="TelegramPollingWorker"/>
+    /// не подписывается на него, а вместо этого вызывает <see cref="MapUpdate"/> напрямую и
+    /// самостоятельно диспетчеризует результат через <c>ICommandDispatcher</c>. Событие оставлено
+    /// только ради соответствия контракту <see cref="IMessagingPlatform"/> (в отличие от MAX,
+    /// где <c>MaxPlatformAdapter.HandleUpdateAsync</c> реально его поднимает). Если в будущем
+    /// появится код, подписывающийся на <see cref="OnMessageReceived"/> у Telegram-адаптера,
+    /// он не получит уведомлений — стоит держать это в уме при рефакторинге.
+    /// </remarks>
+#pragma warning disable CS0067 // Событие не вызывается изнутри класса — см. примечание выше
     public event Func<IncomingMessage, Task>? OnMessageReceived;
 #pragma warning restore CS0067
 
@@ -45,30 +55,15 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     /// </remarks>
     public async Task SendTextAsync(string chatId, string text, BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0)
-        {
-            _logger.LogError("Некорректный chatId");
+        if (!TryParseChatId(chatId, out var chatIdLong, "отправки сообщения"))
             return;
-        }
 
-        var markup = keyboard is not null ? ButtonMapper.CreateInline(keyboard) : null;
+        var markup = ToInlineMarkup(keyboard);
 
-        try
-        {
-            await _client.SendMessage(chatIdLong, text, parseMode: ParseMode.Markdown, replyMarkup: markup, cancellationToken: ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Ошибка отправки с Markdown. Повтор без разметки.");
-            try
-            {
-                await _client.SendMessage(chatIdLong, text, replyMarkup: markup, cancellationToken: ct);
-            }
-            catch (Exception innerEx)
-            {
-                _logger.LogError(innerEx, "Не удалось отправить сообщение даже без Markdown");
-            }
-        }
+        await SendWithMarkdownFallbackAsync(
+            markdownAction: () => _client.SendMessage(chatIdLong, text, parseMode: ParseMode.Markdown, replyMarkup: markup, cancellationToken: ct),
+            plainAction: () => _client.SendMessage(chatIdLong, text, replyMarkup: markup, cancellationToken: ct),
+            operationName: "отправки сообщения").ConfigureAwait(false);
     }
 
     // ── Геопозиция ────────────────────────────────────────────────────────
@@ -76,19 +71,16 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     /// <inheritdoc />
     public async Task SendLocationAsync(string chatId, double latitude, double longitude, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0)
-        {
-            _logger.LogError("Некорректный chatId для геопозиции");
+        if (!TryParseChatId(chatId, out var chatIdLong, "отправки геопозиции"))
             return;
-        }
 
         try
         {
-            await _client.SendLocation(chatIdLong, (float)latitude, (float)longitude, cancellationToken: ct);
+            await _client.SendLocation(chatIdLong, (float)latitude, (float)longitude, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Ошибка при отправке геопозиции");
+            _logger.LogError(ex, "Ошибка при отправке геопозиции в чат {ChatId}", chatId);
         }
     }
 
@@ -101,19 +93,16 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     public async Task SendPhotoAsync(string chatId, string photoUrlOrFileId, string? caption = null,
         BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0)
-        {
-            _logger.LogError("Некорректный chatId для отправки фото");
+        if (!TryParseChatId(chatId, out var chatIdLong, "отправки фото"))
             return;
-        }
 
-        var markup = keyboard is not null ? ButtonMapper.CreateInline(keyboard) : null;
+        var markup = ToInlineMarkup(keyboard);
         var parseMode = caption is not null ? ParseMode.Markdown : default(ParseMode);
 
         try
         {
             await _client.SendPhoto(chatIdLong, InputFile.FromString(photoUrlOrFileId),
-                caption: caption, parseMode: parseMode, replyMarkup: markup, cancellationToken: ct);
+                caption: caption, parseMode: parseMode, replyMarkup: markup, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -132,39 +121,29 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     public async Task SendFileAsync(string chatId, Stream content, string fileName, string? mimeType = null,
         string? caption = null, BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0)
-        {
-            _logger.LogError("Некорректный chatId для отправки файла");
+        if (!TryParseChatId(chatId, out var chatIdLong, "отправки файла"))
             return;
-        }
 
-        var markup = keyboard is not null ? ButtonMapper.CreateInline(keyboard) : null;
+        var markup = ToInlineMarkup(keyboard);
         var parseMode = caption is not null ? ParseMode.Markdown : default(ParseMode);
         var inputFile = InputFile.FromStream(content, fileName);
+        var kind = ResolveFileKind(mimeType, fileName);
 
         try
         {
-            // Выбираем метод отправки по MIME-типу
-            if (IsPhoto(mimeType, fileName))
+            Task sendTask = kind switch
             {
-                await _client.SendPhoto(chatIdLong, inputFile, caption: caption,
-                    parseMode: parseMode, replyMarkup: markup, cancellationToken: ct);
-            }
-            else if (IsVideo(mimeType, fileName))
-            {
-                await _client.SendVideo(chatIdLong, inputFile, caption: caption,
-                    parseMode: parseMode, replyMarkup: markup, cancellationToken: ct);
-            }
-            else if (IsAudio(mimeType, fileName))
-            {
-                await _client.SendAudio(chatIdLong, inputFile, caption: caption,
-                    parseMode: parseMode, replyMarkup: markup, cancellationToken: ct);
-            }
-            else
-            {
-                await _client.SendDocument(chatIdLong, inputFile, caption: caption,
-                    parseMode: parseMode, replyMarkup: markup, cancellationToken: ct);
-            }
+                TelegramFileKind.Photo => _client.SendPhoto(chatIdLong, inputFile, caption: caption,
+                    parseMode: parseMode, replyMarkup: markup, cancellationToken: ct),
+                TelegramFileKind.Video => _client.SendVideo(chatIdLong, inputFile, caption: caption,
+                    parseMode: parseMode, replyMarkup: markup, cancellationToken: ct),
+                TelegramFileKind.Audio => _client.SendAudio(chatIdLong, inputFile, caption: caption,
+                    parseMode: parseMode, replyMarkup: markup, cancellationToken: ct),
+                _ => _client.SendDocument(chatIdLong, inputFile, caption: caption,
+                    parseMode: parseMode, replyMarkup: markup, cancellationToken: ct)
+            };
+
+            await sendTask.ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -186,14 +165,14 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     {
         ArgumentNullException.ThrowIfNull(file);
 
-        var tgFile = await _client.GetFile(file.FileId, ct);
+        var tgFile = await _client.GetFile(file.FileId, ct).ConfigureAwait(false);
 
         if (string.IsNullOrWhiteSpace(tgFile.FilePath))
             throw new InvalidOperationException(
                 $"Telegram не вернул FilePath для file_id={file.FileId}");
 
         var ms = new MemoryStream();
-        await _client.DownloadFile(tgFile.FilePath, ms, ct);
+        await _client.DownloadFile(tgFile.FilePath, ms, ct).ConfigureAwait(false);
         ms.Position = 0;
         return ms;
     }
@@ -209,19 +188,15 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     public async Task EditMessageAsync(string chatId, string messageId, string newText,
         BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0 ||
-            !int.TryParse(messageId, out var msgIdInt))
-        {
-            _logger.LogError("Некорректный chatId или messageId для редактирования");
+        if (!TryParseChatAndMessageId(chatId, messageId, out var chatIdLong, out var msgIdInt, "редактирования сообщения"))
             return;
-        }
 
-        var markup = keyboard is not null ? ButtonMapper.CreateInline(keyboard) : null;
+        var markup = ToInlineMarkup(keyboard);
 
         try
         {
             await _client.EditMessageText(chatIdLong, msgIdInt, newText,
-                parseMode: ParseMode.Markdown, replyMarkup: markup, cancellationToken: ct);
+                parseMode: ParseMode.Markdown, replyMarkup: markup, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -233,18 +208,14 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     public async Task EditMessageReplyMarkupAsync(string chatId, string messageId,
         BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0 ||
-            !int.TryParse(messageId, out var msgIdInt))
-        {
-            _logger.LogError("Некорректный chatId или messageId для редактирования кнопок");
+        if (!TryParseChatAndMessageId(chatId, messageId, out var chatIdLong, out var msgIdInt, "редактирования кнопок"))
             return;
-        }
 
-        var markup = keyboard is not null ? ButtonMapper.CreateInline(keyboard) : null;
+        var markup = ToInlineMarkup(keyboard);
 
         try
         {
-            await _client.EditMessageReplyMarkup(chatIdLong, msgIdInt, replyMarkup: markup, cancellationToken: ct);
+            await _client.EditMessageReplyMarkup(chatIdLong, msgIdInt, replyMarkup: markup, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -257,16 +228,12 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     /// <inheritdoc />
     public async Task DeleteMessageAsync(string chatId, string messageId, CancellationToken ct = default)
     {
-        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0 ||
-            !int.TryParse(messageId, out var msgIdInt))
-        {
-            _logger.LogError("Некорректный chatId или messageId для удаления");
+        if (!TryParseChatAndMessageId(chatId, messageId, out var chatIdLong, out var msgIdInt, "удаления сообщения"))
             return;
-        }
 
         try
         {
-            await _client.DeleteMessage(chatIdLong, msgIdInt, cancellationToken: ct);
+            await _client.DeleteMessage(chatIdLong, msgIdInt, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -325,20 +292,82 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     /// <param name="update">Обновление от Telegram API.</param>
     public async Task AcknowledgeCallbackAsync(Update update)
     {
-        if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery is not null)
+        if (update.Type != UpdateType.CallbackQuery || update.CallbackQuery is null)
+            return;
+
+        try
         {
-            try
-            {
-                await _client.AnswerCallbackQuery(update.CallbackQuery.Id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Не удалось выполнить AnswerCallbackQuery");
-            }
+            await _client.AnswerCallbackQuery(update.CallbackQuery.Id).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Не удалось выполнить AnswerCallbackQuery для {CallbackQueryId}", update.CallbackQuery.Id);
         }
     }
 
     // ── Вспомогательные методы ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Разбирает строковый идентификатор чата в числовой формат Telegram API, логируя ошибку при неудаче.
+    /// </summary>
+    private bool TryParseChatId(string chatId, out long chatIdLong, string operation)
+    {
+        if (long.TryParse(chatId, out chatIdLong) && chatIdLong != 0)
+            return true;
+
+        _logger.LogError("Некорректный chatId для {Operation}", operation);
+        return false;
+    }
+
+    /// <summary>
+    /// Разбирает идентификаторы чата и сообщения, требуемые операциями редактирования/удаления,
+    /// логируя ошибку при неудаче.
+    /// </summary>
+    private bool TryParseChatAndMessageId(string chatId, string messageId, out long chatIdLong, out int msgIdInt, string operation)
+    {
+        var chatOk = long.TryParse(chatId, out chatIdLong) && chatIdLong != 0;
+        var msgOk = int.TryParse(messageId, out msgIdInt);
+
+        if (chatOk && msgOk)
+            return true;
+
+        _logger.LogError("Некорректный chatId или messageId для {Operation}", operation);
+        return false;
+    }
+
+    /// <summary>
+    /// Преобразует платформо-независимую клавиатуру в разметку Telegram, либо возвращает
+    /// <see langword="null"/>, если клавиатура не задана.
+    /// </summary>
+    private static InlineKeyboardMarkup? ToInlineMarkup(BotKeyboard? keyboard)
+        => keyboard is not null ? ButtonMapper.CreateInline(keyboard) : null;
+
+    /// <summary>
+    /// Выполняет отправку сообщения с Markdown-разметкой и, в случае ошибки, повторяет
+    /// операцию без разметки.
+    /// </summary>
+    /// <param name="markdownAction">Действие отправки с Markdown-разметкой.</param>
+    /// <param name="plainAction">Действие отправки без разметки (fallback).</param>
+    /// <param name="operationName">Название операции для сообщений об ошибке.</param>
+    private async Task SendWithMarkdownFallbackAsync(Func<Task> markdownAction, Func<Task> plainAction, string operationName)
+    {
+        try
+        {
+            await markdownAction().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ошибка {Operation} с Markdown. Повтор без разметки.", operationName);
+            try
+            {
+                await plainAction().ConfigureAwait(false);
+            }
+            catch (Exception innerEx)
+            {
+                _logger.LogError(innerEx, "Не удалось выполнить {Operation} даже без Markdown", operationName);
+            }
+        }
+    }
 
     /// <summary>
     /// Извлекает все файловые вложения из входящего Telegram-сообщения
@@ -432,41 +461,38 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
             : query.From.Id.ToString();
 
     /// <summary>
-    /// Определяет, является ли файл изображением, по MIME-типу или расширению.
+    /// Категория исходящего файла, используемая для выбора метода отправки Telegram Bot API.
     /// </summary>
-    /// <param name="mimeType">MIME-тип файла (может быть <see langword="null"/>).</param>
-    /// <param name="fileName">Имя файла с расширением.</param>
-    /// <returns><see langword="true"/>, если файл является изображением.</returns>
-    private static bool IsPhoto(string? mimeType, string fileName)
+    private enum TelegramFileKind
     {
-        if (mimeType is not null && mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return true;
-        var ext = Path.GetExtension(fileName).ToLowerInvariant();
-        return ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".bmp" or ".webp";
+        Photo,
+        Video,
+        Audio,
+        Document
     }
 
     /// <summary>
-    /// Определяет, является ли файл видео, по MIME-типу или расширению.
+    /// Определяет категорию файла по MIME-типу или, если он не задан/не распознан, по расширению имени файла.
     /// </summary>
     /// <param name="mimeType">MIME-тип файла (может быть <see langword="null"/>).</param>
     /// <param name="fileName">Имя файла с расширением.</param>
-    /// <returns><see langword="true"/>, если файл является видео.</returns>
-    private static bool IsVideo(string? mimeType, string fileName)
+    /// <returns>Категория файла для выбора метода отправки.</returns>
+    private static TelegramFileKind ResolveFileKind(string? mimeType, string fileName)
     {
-        if (mimeType is not null && mimeType.StartsWith("video/", StringComparison.OrdinalIgnoreCase)) return true;
-        var ext = Path.GetExtension(fileName).ToLowerInvariant();
-        return ext is ".mp4" or ".mov" or ".mkv" or ".webm";
-    }
+        if (mimeType is not null)
+        {
+            if (mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return TelegramFileKind.Photo;
+            if (mimeType.StartsWith("video/", StringComparison.OrdinalIgnoreCase)) return TelegramFileKind.Video;
+            if (mimeType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) return TelegramFileKind.Audio;
+        }
 
-    /// <summary>
-    /// Определяет, является ли файл аудио, по MIME-типу или расширению.
-    /// </summary>
-    /// <param name="mimeType">MIME-тип файла (может быть <see langword="null"/>).</param>
-    /// <param name="fileName">Имя файла с расширением.</param>
-    /// <returns><see langword="true"/>, если файл является аудио.</returns>
-    private static bool IsAudio(string? mimeType, string fileName)
-    {
-        if (mimeType is not null && mimeType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) return true;
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
-        return ext is ".mp3" or ".wav" or ".m4a" or ".ogg" or ".flac";
+        return ext switch
+        {
+            ".jpg" or ".jpeg" or ".png" or ".gif" or ".bmp" or ".webp" => TelegramFileKind.Photo,
+            ".mp4" or ".mov" or ".mkv" or ".webm" => TelegramFileKind.Video,
+            ".mp3" or ".wav" or ".m4a" or ".ogg" or ".flac" => TelegramFileKind.Audio,
+            _ => TelegramFileKind.Document
+        };
     }
 }
