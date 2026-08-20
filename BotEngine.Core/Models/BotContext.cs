@@ -9,6 +9,12 @@ public record BotContext(
     IMessagingPlatform MessagingPlatform,
     IUserSessionStore Sessions)
 {
+        /// <summary>
+    /// Уникальный ключ сессии с изоляцией по платформе (исключает межплатформенные коллизии).
+    /// </summary>
+    public string SessionKey => $"{Platform}:{UserId}".ToLowerInvariant();
+
+
     // ── Текстовые сообщения ────────────────────────────────────────────────
 
     public Task ReplyAsync(string text, BotKeyboard? keyboard = null, CancellationToken ct = default)
@@ -62,10 +68,8 @@ public record BotContext(
 
 
     // ── Сессии ────────────────────────────────────────────────────────────
-    /// <summary>
-    /// Уникальный ключ сессии с изоляцией по платформе (исключает межплатформенные коллизии).
-    /// </summary>
-    public string SessionKey => $"{Platform}:{UserId}".ToLowerInvariant();
+
+
     /// <summary>
     /// Редактирует существующее сообщение при нажатии inline-кнопки (callback), 
     /// либо отправляет новое сообщение при текстовой команде.
