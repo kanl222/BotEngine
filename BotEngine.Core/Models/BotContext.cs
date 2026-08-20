@@ -60,17 +60,22 @@ public record BotContext(
     public Task DeleteAsync(string messageId, CancellationToken ct = default)
         => MessagingPlatform.DeleteMessageAsync(ChatId, messageId, ct);
 
+    /// <summary>
+    /// Уникальный ключ сессии с изоляцией по платформе (исключает межплатформенные коллизии).
+    /// </summary>
+    public string SessionKey => $"{Platform}:{UserId}".ToLowerInvariant();
+
     // ── Сессии ────────────────────────────────────────────────────────────
 
     /// <summary>Получить активное состояние диалога для текущего пользователя.</summary>
     public Task<UserDialogState?> GetSessionAsync(CancellationToken ct = default)
-        => Sessions.GetStateAsync(UserId, ct);
+        => Sessions.GetStateAsync(SessionKey, ct);
 
     /// <summary>Установить состояние диалога для текущего пользователя.</summary>
     public Task SetSessionAsync(string awaitingInputFor, Dictionary<string, string>? data = null, TimeSpan? ttl = null, CancellationToken ct = default)
-        => Sessions.SetStateAsync(UserId, new UserDialogState(awaitingInputFor) { Data = data ?? new() }, ttl, ct);
+        => Sessions.SetStateAsync(SessionKey, new UserDialogState(awaitingInputFor) { Data = data ?? new() }, ttl, ct);
 
     /// <summary>Сбросить (завершить) активный диалог для текущего пользователя.</summary>
     public Task ClearSessionAsync(CancellationToken ct = default)
-        => Sessions.ClearStateAsync(UserId, ct);
+        => Sessions.ClearStateAsync(SessionKey, ct);
 }

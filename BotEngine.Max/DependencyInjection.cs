@@ -19,6 +19,7 @@ public static class DependencyInjection
     public static IServiceCollection AddMax(this IServiceCollection services)
     {
         services.AddSingleton<MaxPlatformAdapter>();
+        services.AddSingleton<IMessagingPlatform>(sp => sp.GetRequiredService<MaxPlatformAdapter>());
         // Keyed DI: команды могут получить нужную платформу через IServiceProvider.GetKeyedService<IMessagingPlatform>("Max")
         services.AddKeyedSingleton<IMessagingPlatform>("Max", (sp, _) => sp.GetRequiredService<MaxPlatformAdapter>());
 
@@ -78,6 +79,7 @@ public static class DependencyInjection
         }
 
         services.AddSingleton<MaxPlatformAdapter>();
+        services.AddSingleton<IMessagingPlatform>(sp => sp.GetRequiredService<MaxPlatformAdapter>());
         services.AddKeyedSingleton<IMessagingPlatform>("Max", (sp, _) => sp.GetRequiredService<MaxPlatformAdapter>());
 
         services.AddHttpClient("MaxBot", (sp, client) =>
