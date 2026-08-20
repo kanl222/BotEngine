@@ -52,7 +52,33 @@ public record BotContext(
     public Task DeleteAsync(string messageId, CancellationToken ct = default)
         => MessagingPlatform.DeleteMessageAsync(ChatId, messageId, ct);
 
-    // ── Сессии ────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Редактирует существующее сообщение при нажатии inline-кнопки (callback), 
+    /// либо отправляет новое сообщение при текстовой команде.
+    /// </summary>
+    public  Task ReplyOrEditAsync(IncomingMessage message,string text,BotKeyboard? keyboard = null,CancellationToken ct = default)
+    {
+        if (!string.IsNullOrEmpty(message.CallbackData) && !string.IsNullOrEmpty(message.MessageId))
+        {
+            return EditAsync(message.MessageId, text, keyboard, ct);
+        }
+
+        return ReplyAsync(text, keyboard, ct);
+    }
+
+    /// <summary>
+    /// Редактирует сообщение, если указан идентификатор и флаг isCallback, иначе отправляет новое.
+    /// </summary>
+    public Task ReplyOrEditAsync(string? messageId,bool isCallback,string text,BotKeyboard? keyboard = null, CancellationToken ct = default)
+    {
+        if (isCallback && !string.IsNullOrEmpty(messageId))
+        {
+            return EditAsync(messageId, text, keyboard, ct);
+        }
+        return ReplyAsync(text, keyboard, ct);
+    }
+
+        // ── Сессии ────────────────────────────────────────────────────────────
 
     /// <summary>Получить активное состояние диалога для текущего пользователя.</summary>
     public Task<UserDialogState?> GetSessionAsync(CancellationToken ct = default)
