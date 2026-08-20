@@ -28,6 +28,20 @@ public interface IMessagingPlatform
         => Task.FromException(new NotSupportedException("EditTextAsync не поддерживается платформой."));
 
     /// <summary>
+    /// Изменить текст и (опционально) клавиатуру ранее отправленного сообщения.
+    /// <para>Платформы, не поддерживающие редактирование, кидают <see cref="NotSupportedException"/>.</para>
+    /// </summary>
+    Task EditMessageAsync(string chatId, string messageId, string newText, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => Task.FromException(new NotSupportedException("EditMessageAsync не поддерживается платформой."));
+
+    /// <summary>
+    /// Изменить только inline-клавиатуру ранее отправленного сообщения, не затрагивая текст.
+    /// <para>Платформы, не поддерживающие редактирование разметки, кидают <see cref="NotSupportedException"/>.</para>
+    /// </summary>
+    Task EditMessageReplyMarkupAsync(string chatId, string messageId, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => Task.FromException(new NotSupportedException("EditMessageReplyMarkupAsync не поддерживается платформой."));
+
+    /// <summary>
     /// Удалить сообщение из чата.
     /// <para>Платформы, не поддерживающие удаление, кидают <see cref="NotSupportedException"/>.</para>
     /// </summary>

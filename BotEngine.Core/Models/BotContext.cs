@@ -46,12 +46,26 @@ public record BotContext(
 
     /// <summary>Отредактировать сообщение по его идентификатору.</summary>
     public Task EditAsync(string messageId, string newText, BotKeyboard? keyboard = null, CancellationToken ct = default)
-        => MessagingPlatform.EditTextAsync(ChatId, messageId, newText, keyboard, ct);
+        => MessagingPlatform.EditMessageAsync(ChatId, messageId, newText, keyboard, ct);
+
+    /// <summary>Отредактировать текст и клавиатуру сообщения по его идентификатору.</summary>
+    public Task EditMessageAsync(string messageId, string newText, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => MessagingPlatform.EditMessageAsync(ChatId, messageId, newText, keyboard, ct);
+
+    /// <summary>Отредактировать только inline-клавиатуру сообщения по его идентификатору.</summary>
+    public Task EditMessageReplyMarkupAsync(string messageId, BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => MessagingPlatform.EditMessageReplyMarkupAsync(ChatId, messageId, keyboard, ct);
 
     /// <summary>Удалить сообщение по его идентификатору.</summary>
     public Task DeleteAsync(string messageId, CancellationToken ct = default)
         => MessagingPlatform.DeleteMessageAsync(ChatId, messageId, ct);
 
+
+    // ── Сессии ────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Уникальный ключ сессии с изоляцией по платформе (исключает межплатформенные коллизии).
+    /// </summary>
+    public string SessionKey => $"{Platform}:{UserId}".ToLowerInvariant();
     /// <summary>
     /// Редактирует существующее сообщение при нажатии inline-кнопки (callback), 
     /// либо отправляет новое сообщение при текстовой команде.
@@ -82,13 +96,13 @@ public record BotContext(
 
     /// <summary>Получить активное состояние диалога для текущего пользователя.</summary>
     public Task<UserDialogState?> GetSessionAsync(CancellationToken ct = default)
-        => Sessions.GetStateAsync(UserId, ct);
+        => Sessions.GetStateAsync(SessionKey, ct);
 
     /// <summary>Установить состояние диалога для текущего пользователя.</summary>
     public Task SetSessionAsync(string awaitingInputFor, Dictionary<string, string>? data = null, TimeSpan? ttl = null, CancellationToken ct = default)
-        => Sessions.SetStateAsync(UserId, new UserDialogState(awaitingInputFor) { Data = data ?? new() }, ttl, ct);
+        => Sessions.SetStateAsync(SessionKey, new UserDialogState(awaitingInputFor) { Data = data ?? new() }, ttl, ct);
 
     /// <summary>Сбросить (завершить) активный диалог для текущего пользователя.</summary>
     public Task ClearSessionAsync(CancellationToken ct = default)
-        => Sessions.ClearStateAsync(UserId, ct);
+        => Sessions.ClearStateAsync(SessionKey, ct);
 }

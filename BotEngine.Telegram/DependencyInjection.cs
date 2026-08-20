@@ -27,6 +27,7 @@ public static class DependencyInjection
         });
 
         services.AddSingleton<TelegramPlatformAdapter>();
+        services.AddSingleton<IMessagingPlatform>(sp => sp.GetRequiredService<TelegramPlatformAdapter>());
         // Keyed DI: команды могут получить нужную платформу через IServiceProvider.GetKeyedService<IMessagingPlatform>("Telegram")
         services.AddKeyedSingleton<IMessagingPlatform>("Telegram", (sp, _) => sp.GetRequiredService<TelegramPlatformAdapter>());
         services.AddHostedService<TelegramPollingWorker>();
@@ -45,6 +46,7 @@ public static class DependencyInjection
         services.AddSingleton<ITelegramBotClient>(new TelegramBotClient(token));
 
         services.AddSingleton<TelegramPlatformAdapter>();
+        services.AddSingleton<IMessagingPlatform>(sp => sp.GetRequiredService<TelegramPlatformAdapter>());
         services.AddKeyedSingleton<IMessagingPlatform>("Telegram", (sp, _) => sp.GetRequiredService<TelegramPlatformAdapter>());
         services.AddHostedService<TelegramPollingWorker>();
 

@@ -16,4 +16,16 @@ public readonly record struct UserDialogState(string AwaitingInputFor)
     /// Например, сохранить промежуточный ввод пользователя до финального подтверждения.
     /// </summary>
     public Dictionary<string, string> Data { get; init; } = new();
+
+    /// <summary>
+    /// Поисковый запрос (хелпер для сценариев поиска).
+    /// </summary>
+    public string? SearchQuery
+    {
+        get => Data.TryGetValue("SearchQuery", out var val) ? val : null;
+        init
+        {
+            if (value is not null) Data["SearchQuery"] = value;
+        }
+    }
 }

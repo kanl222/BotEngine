@@ -201,7 +201,12 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
     // ── Редактирование ────────────────────────────────────────────────────
 
     /// <inheritdoc />
-    public async Task EditTextAsync(string chatId, string messageId, string newText,
+    public Task EditTextAsync(string chatId, string messageId, string newText,
+        BotKeyboard? keyboard = null, CancellationToken ct = default)
+        => EditMessageAsync(chatId, messageId, newText, keyboard, ct);
+
+    /// <inheritdoc />
+    public async Task EditMessageAsync(string chatId, string messageId, string newText,
         BotKeyboard? keyboard = null, CancellationToken ct = default)
     {
         if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0 ||
@@ -221,6 +226,29 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
         catch (Exception ex)
         {
             _logger.LogError(ex, "Ошибка при редактировании сообщения {MessageId} в чате {ChatId}", messageId, chatId);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task EditMessageReplyMarkupAsync(string chatId, string messageId,
+        BotKeyboard? keyboard = null, CancellationToken ct = default)
+    {
+        if (!long.TryParse(chatId, out var chatIdLong) || chatIdLong == 0 ||
+            !int.TryParse(messageId, out var msgIdInt))
+        {
+            _logger.LogError("Некорректный chatId или messageId для редактирования кнопок");
+            return;
+        }
+
+        var markup = keyboard is not null ? ButtonMapper.CreateInline(keyboard) : null;
+
+        try
+        {
+            await _client.EditMessageReplyMarkup(chatIdLong, msgIdInt, replyMarkup: markup, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при редактировании кнопок сообщения {MessageId} в чате {ChatId}", messageId, chatId);
         }
     }
 

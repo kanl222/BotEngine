@@ -68,12 +68,12 @@ public sealed class CommandDispatcher : ICommandDispatcher
             }
 
             _logger.LogWarning("Неизвестный ключ callback-команды: '{Key}' (платформа: {Platform})", commandKey, message.Platform);
-            await platform.SendTextAsync(message.ChatId, "Неизвестная действие. Нажмите /start для главного меню.", ct: ct);
+            await platform.SendTextAsync(message.ChatId, "Неизвестное действие. Нажмите /start для главного меню.", ct: ct);
             return;
         }
 
         // 2. Проверка активных сессий пользователя
-        var sessionState = await _sessions.GetStateAsync(message.UserId, ct);
+        var sessionState = await _sessions.GetStateAsync(context.SessionKey, ct);
         if (sessionState is { } state)
         {
             var sessionCommandKey = state.AwaitingInputFor.Trim().ToLowerInvariant();
@@ -85,7 +85,7 @@ public sealed class CommandDispatcher : ICommandDispatcher
             }
 
             _logger.LogWarning("Сессия ссылается на неизвестную команду '{Key}'. Очистка устаревшей сессии.", sessionCommandKey);
-            await _sessions.ClearStateAsync(message.UserId, ct);
+            await _sessions.ClearStateAsync(context.SessionKey, ct);
         }
 
         // 3. Маршрутизация по явной команде (/start, /help, /ask)
