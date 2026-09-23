@@ -52,9 +52,10 @@ public sealed class CommandDispatcher : ICommandDispatcher
             MessagingPlatform: platform,
             Sessions: _sessions);
 
-        _logger.LogInformation(
-            "Маршрутизация сообщения: Platform={Platform}, ChatId={ChatId}, UserId={UserId}, Text='{Text}', CallbackData='{CallbackData}'",
-            message.Platform, message.ChatId, message.UserId, message.Text, message.CallbackData);
+        _logger.LogDebug(
+            "Маршрутизация сообщения: Platform={Platform}, HasText={HasText}, HasCallback={HasCallback}",
+            message.Platform,
+            !string.IsNullOrEmpty(message.Text), !string.IsNullOrEmpty(message.CallbackData));
 
         // 1. Обработка CallbackData (от нажатия Inline-кнопок)
         if (!string.IsNullOrEmpty(message.CallbackData))
@@ -72,23 +73,8 @@ public sealed class CommandDispatcher : ICommandDispatcher
             return;
         }
 
-        // 2. Проверка активных сессий пользователя
-        var sessionState = await _sessions.GetStateAsync(context.SessionKey, ct);
-        if (sessionState is { } state)
-        {
-            var sessionCommandKey = state.AwaitingInputFor.Trim().ToLowerInvariant();
-            var sessionCommand = _factory.Resolve(sessionCommandKey);
-            if (sessionCommand is not null)
-            {
-                await ExecuteSafeAsync(sessionCommand, context, message, ct);
-                return;
-            }
-
-            _logger.LogWarning("Сессия ссылается на неизвестную команду '{Key}'. Очистка устаревшей сессии.", sessionCommandKey);
-            await _sessions.ClearStateAsync(context.SessionKey, ct);
-        }
-
-        // 3. Маршрутизация по явной команде (/start, /help, /ask)
+        // 2. Явные slash-команды имеют приоритет над активным диалогом.
+        // Это позволяет в любой момент выполнить /start и выйти из зависшего сценария.
         var text = message.Text?.Trim() ?? string.Empty;
         var commandName = text.StartsWith('/') ? text[1..] : text;
         var spaceIdx = commandName.IndexOf(' ');
@@ -103,6 +89,22 @@ public sealed class CommandDispatcher : ICommandDispatcher
                 await ExecuteSafeAsync(namedCommand, context, message, ct);
                 return;
             }
+        }
+
+        // 3. Проверка активных сессий пользователя
+        var sessionState = await _sessions.GetStateAsync(context.SessionKey, ct);
+        if (sessionState is { } state)
+        {
+            var sessionCommandKey = state.AwaitingInputFor.Trim().ToLowerInvariant();
+            var sessionCommand = _factory.Resolve(sessionCommandKey);
+            if (sessionCommand is not null)
+            {
+                await ExecuteSafeAsync(sessionCommand, context, message, ct);
+                return;
+            }
+
+            _logger.LogWarning("Сессия ссылается на неизвестную команду '{Key}'. Очистка устаревшей сессии.", sessionCommandKey);
+            await _sessions.ClearStateAsync(context.SessionKey, ct);
         }
 
         // 4. Фолбэк для естественного языка — отправляем в RAG-команду ("ask" или "default")
@@ -122,6 +124,10 @@ public sealed class CommandDispatcher : ICommandDispatcher
         try
         {
             await command.ExecuteAsync(context, message, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

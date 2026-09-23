@@ -56,7 +56,7 @@ public sealed class RateLimitMiddleware : IBotMiddleware
     /// <inheritdoc />
     public async Task InvokeAsync(IncomingMessage message, IMessagingPlatform platform, BotMiddlewareDelegate next, CancellationToken ct = default)
     {
-        if (IsThrottled(message.UserId))
+        if (IsThrottled($"{message.Platform}:{message.UserId}".ToLowerInvariant()))
         {
             _logger.LogWarning(
                 "Rate limit exceeded: UserId={UserId}, Platform={Platform}",
@@ -92,6 +92,20 @@ public sealed class RateLimitMiddleware : IBotMiddleware
                 return true;
 
             queue.Enqueue(nowTicks);
+
+            if (_counters.Count > 10_000)
+            {
+                foreach (var pair in _counters)
+                {
+                    lock (pair.Value)
+                    {
+                        while (pair.Value.Count > 0 && pair.Value.Peek() < cutoff)
+                            pair.Value.Dequeue();
+                        if (pair.Value.Count == 0)
+                            _counters.TryRemove(pair.Key, out _);
+                    }
+                }
+            }
             return false;
         }
     }

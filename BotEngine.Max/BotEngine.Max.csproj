@@ -9,6 +9,7 @@
     <Authors>YourOrg</Authors>
     <Description>MAX (VK Teams) adapter for BotEngine.</Description>
     <IsPackable>true</IsPackable>
+    <Configurations>Debug;Release;Development</Configurations>
   </PropertyGroup>
 
   <ItemGroup>

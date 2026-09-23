@@ -9,6 +9,7 @@
     <Authors>YourOrg</Authors>
     <Description>Platform-agnostic bot engine core: models, interfaces, dispatcher, session store.</Description>
     <IsPackable>true</IsPackable>
+    <Configurations>Debug;Release;Development</Configurations>
   </PropertyGroup>
 
   <ItemGroup>

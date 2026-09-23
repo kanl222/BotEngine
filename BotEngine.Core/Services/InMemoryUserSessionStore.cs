@@ -38,6 +38,7 @@ public sealed class InMemoryUserSessionStore : IUserSessionStore, IHostedService
     /// <returns>Экземпляр <see cref="UserDialogState"/> или null, если состояние отсутствует или устарело.</returns>
     public Task<UserDialogState?> GetStateAsync(string userId, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (_store.TryGetValue(userId, out var entry))
         {
             if (entry.ExpiresAt > DateTimeOffset.UtcNow)
@@ -58,6 +59,7 @@ public sealed class InMemoryUserSessionStore : IUserSessionStore, IHostedService
     /// <returns>Задача, представляющая процесс сохранения.</returns>
     public Task SetStateAsync(string userId, UserDialogState state, TimeSpan? ttl = null, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var expires = DateTimeOffset.UtcNow.Add(ttl ?? TimeSpan.FromMinutes(10));
         _store[userId] = new Entry(state, expires);
         return Task.CompletedTask;
@@ -71,6 +73,7 @@ public sealed class InMemoryUserSessionStore : IUserSessionStore, IHostedService
     /// <returns>Задача, представляющая процесс удаления.</returns>
     public Task ClearStateAsync(string userId, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         _store.TryRemove(userId, out _);
         return Task.CompletedTask;
     }

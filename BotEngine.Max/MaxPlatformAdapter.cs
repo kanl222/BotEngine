@@ -144,7 +144,7 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
                 ContentType = mimeType
             }, ct).ConfigureAwait(false);
 
-            _logger.LogDebug("Файл '{FileName}' загружен, токен: {Token}", fileName, token);
+            _logger.LogDebug("Файл '{FileName}' успешно загружен на MAX", fileName);
 
             var primary = BuildAttachmentFromToken(uploadType, token, fileName);
 
@@ -158,9 +158,14 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
 
             await _client.Messages.SendMessageAsync(request, cancellationToken: ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Ошибка при отправке файла '{FileName}' в чат {ChatId}", fileName, chatId);
+            throw;
         }
     }
 
@@ -242,7 +247,11 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
 
             await _client.Messages.EditMessageByIdAsync(messageId, request, cancellationToken: ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (IsMarkdownFormattingError(ex))
         {
             _logger.LogError(ex, "Ошибка при редактировании кнопок сообщения {MessageId} в чате {ChatId}", messageId, chatId);
         }
@@ -439,11 +448,24 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
                 request.Format = null;
                 await action(request, ct).ConfigureAwait(false);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception innerEx)
             {
                 _logger.LogError(innerEx, "Не удалось выполнить {Operation} даже без Markdown", operationName);
+                throw;
             }
         }
+    }
+
+    private static bool IsMarkdownFormattingError(Exception exception)
+    {
+        var message = exception.Message;
+        return message.Contains("markdown", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("format", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("parse", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

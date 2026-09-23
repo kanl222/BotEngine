@@ -45,17 +45,21 @@ public sealed class RedisUserSessionStore : IUserSessionStore
         try
         {
             var key = BuildKey(userId);
-            var raw = await _db.StringGetAsync(key);
+            var raw = await _db.StringGetAsync(key).WaitAsync(ct);
 
             if (raw.IsNullOrEmpty)
                 return null;
 
             return JsonSerializer.Deserialize<UserDialogState>((string)raw!, JsonOpts);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Redis: ошибка при чтении состояния сессии (UserId={UserId})", userId);
-            return null;
+            throw;
         }
     }
 
@@ -66,11 +70,16 @@ public sealed class RedisUserSessionStore : IUserSessionStore
         {
             var key = BuildKey(userId);
             var json = JsonSerializer.Serialize(state, JsonOpts);
-            await _db.StringSetAsync(key, json, ttl ?? DefaultTtl);
+            await _db.StringSetAsync(key, json, ttl ?? DefaultTtl).WaitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Redis: ошибка при записи состояния сессии (UserId={UserId})", userId);
+            throw;
         }
     }
 
@@ -79,11 +88,16 @@ public sealed class RedisUserSessionStore : IUserSessionStore
     {
         try
         {
-            await _db.KeyDeleteAsync(BuildKey(userId));
+            await _db.KeyDeleteAsync(BuildKey(userId)).WaitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Redis: ошибка при удалении состояния сессии (UserId={UserId})", userId);
+            throw;
         }
     }
 

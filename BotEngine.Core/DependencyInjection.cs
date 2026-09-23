@@ -34,6 +34,8 @@ public static class DependencyInjection
         services.AddSingleton<IUserSessionStore>(sp => sp.GetRequiredService<InMemoryUserSessionStore>());
         services.AddHostedService(sp => sp.GetRequiredService<InMemoryUserSessionStore>());
 
+        services.AddSingleton<IBotMiddleware, UserConcurrencyMiddleware>();
+
         return services;
     }
 
@@ -82,7 +84,10 @@ public static class DependencyInjection
         Action<RateLimitOptions>? configure = null)
     {
         var optionsBuilder = services.AddOptions<RateLimitOptions>()
-            .BindConfiguration(RateLimitOptions.SectionName);
+            .BindConfiguration(RateLimitOptions.SectionName)
+            .Validate(options => options.MaxMessages > 0, "MaxMessages должен быть больше нуля.")
+            .Validate(options => options.WindowSeconds > 0, "WindowSeconds должен быть больше нуля.")
+            .ValidateOnStart();
 
         if (configure is not null)
             optionsBuilder.Configure(configure);

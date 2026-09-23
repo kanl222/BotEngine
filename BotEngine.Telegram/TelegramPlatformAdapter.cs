@@ -145,9 +145,14 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
 
             await sendTask.ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Ошибка при отправке файла '{FileName}' в чат {ChatId}", fileName, chatId);
+            throw;
         }
     }
 
@@ -355,18 +360,35 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
         {
             await markdownAction().ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (IsMarkdownFormattingError(ex))
         {
             _logger.LogWarning(ex, "Ошибка {Operation} с Markdown. Повтор без разметки.", operationName);
             try
             {
                 await plainAction().ConfigureAwait(false);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception innerEx)
             {
                 _logger.LogError(innerEx, "Не удалось выполнить {Operation} даже без Markdown", operationName);
+                throw;
             }
         }
+    }
+
+    private static bool IsMarkdownFormattingError(Exception exception)
+    {
+        var message = exception.Message;
+        return message.Contains("parse entities", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("can't parse", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("markdown", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
