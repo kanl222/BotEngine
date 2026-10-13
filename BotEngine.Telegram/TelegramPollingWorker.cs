@@ -28,6 +28,8 @@ public sealed class TelegramPollingWorker : BackgroundService
     private readonly TelegramPlatformAdapter _adapter;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<TelegramPollingWorker> _logger;
+    private readonly HashSet<Task> _activeUpdates = new();
+    private readonly object _updatesLock = new();
 
     /// <summary>
     /// Инициализирует новый экземпляр <see cref="TelegramPollingWorker"/>.
@@ -88,7 +90,31 @@ public sealed class TelegramPollingWorker : BackgroundService
     /// <param name="update">Объект входящего обновления.</param>
     /// <param name="ct">Токен отмены операции.</param>
     /// <returns>Задача обработки обновления.</returns>
-    private async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
+    private Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
+    {
+        // Не удерживаем цикл приёма обновлений сетевыми запросами команды.
+        // UserConcurrencyMiddleware сохраняет порядок сообщений одного пользователя.
+        lock (_updatesLock)
+        {
+            var task = ProcessUpdateAsync(update, ct);
+            _activeUpdates.Add(task);
+            _ = task.ContinueWith(completed =>
+            {
+                lock (_updatesLock) _activeUpdates.Remove(completed);
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        return Task.CompletedTask;
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken).ConfigureAwait(false);
+        Task[] active;
+        lock (_updatesLock) active = _activeUpdates.ToArray();
+        await Task.WhenAll(active).WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ProcessUpdateAsync(Update update, CancellationToken ct)
     {
         try
         {
