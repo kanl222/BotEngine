@@ -75,6 +75,14 @@ public sealed class TelegramPollingWorker : BackgroundService
             if (incoming is null)
                 return;
 
+            using var logScope = _logger.BeginScope(new Dictionary<string, object?>
+            {
+                ["CorrelationId"] = incoming.CorrelationId,
+                ["Platform"] = incoming.Platform,
+                ["ChatId"] = incoming.ChatId,
+                ["UserId"] = incoming.UserId
+            });
+
             await _adapter.AcknowledgeCallbackAsync(update);
 
             using var scope = _scopeFactory.CreateScope();

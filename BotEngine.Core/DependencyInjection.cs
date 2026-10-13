@@ -1,6 +1,8 @@
+using BotEngine.Core.Configuration;
 using BotEngine.Core.Interfaces;
 using BotEngine.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using StackExchange.Redis;
 
 namespace BotEngine.Core;
@@ -20,8 +22,20 @@ public static class DependencyInjection
     /// Для горизонтального масштабирования замените InMemory на Redis,
     /// вызвав <see cref="AddRedisSessionStore"/> после этого метода.
     /// </summary>
-    public static IServiceCollection AddBotEngine(this IServiceCollection services)
+    public static IServiceCollection AddBotEngine(
+        this IServiceCollection services,
+        Action<BotEngineOptions>? configure = null)
     {
+        var optionsBuilder = services.AddOptions<BotEngineOptions>()
+            .BindConfiguration(BotEngineOptions.SectionName)
+            .Validate(
+                options => !string.IsNullOrWhiteSpace(options.InstanceId),
+                $"{BotEngineOptions.SectionName}:{nameof(BotEngineOptions.InstanceId)} не должен быть пустым.");
+
+        if (configure is not null)
+            optionsBuilder.Configure(configure);
+
+        services.TryAddSingleton<ISessionKeyProvider, DefaultSessionKeyProvider>();
         services.AddScoped<ICommandFactory, CommandFactory>();
 
         // CommandDispatcher — Scoped: каждый входящий запрос обрабатывается в своём scope

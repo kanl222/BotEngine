@@ -11,6 +11,11 @@ public sealed record IncomingMessage(
 {
     public DateTime ReceivedAt { get; init; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// Идентификатор исходного обновления для сквозной диагностики и трассировки.
+    /// </summary>
+    public string? CorrelationId { get; init; }
+
     /// <summary>Файловые вложения сообщения (пусто, если сообщение без файлов).</summary>
     public IReadOnlyList<BotFile> Files { get; init; } = Array.Empty<BotFile>();
 

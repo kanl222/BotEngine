@@ -300,7 +300,8 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
                     Platform: "Telegram",
                     MessageId: msg.MessageId.ToString())
                 {
-                    Files = files
+                    Files = files,
+                    CorrelationId = $"telegram:{update.Id}"
                 };
             }
 
@@ -311,7 +312,10 @@ public sealed class TelegramPlatformAdapter : IMessagingPlatform
                     Text: cq.Data ?? string.Empty,
                     CallbackData: cq.Data,
                     Platform: "Telegram",
-                    MessageId: cq.Message?.MessageId.ToString());
+                    MessageId: cq.Message?.MessageId.ToString())
+                {
+                    CorrelationId = $"telegram:{update.Id}"
+                };
 
             default:
                 return null;

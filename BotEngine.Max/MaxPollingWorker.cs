@@ -1,6 +1,5 @@
 using BotEngine.Core.Interfaces;
 using BotEngine.Core.Models;
-using BotEngine.Core.Services;
 using MAX.Bot.Interfaces;
 using MAX.Bot.Interfaces.Models;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,26 +37,46 @@ public sealed class MaxPollingWorker : BackgroundService
         _logger = logger;
 
         _adapter.OnMessageReceived += HandleMessageAsync;
+        _client.Updates.OnPollingError += HandlePollingErrorAsync;
     }
 
     private CancellationToken _stoppingToken;
 
     /// <summary>
     /// Обрабатывает входящее платформо-независимое сообщение от пользователя.
+    /// Запускает диспетчеризацию изолированно в пуле задач, исключая Head-of-Line Blocking очереди обновлений.
     /// </summary>
     /// <param name="message">Входящее сообщение.</param>
-    /// <returns>Задача обработки сообщения.</returns>
-    private async Task HandleMessageAsync(IncomingMessage message)
+    /// <returns>Завершённая задача.</returns>
+    private Task HandleMessageAsync(IncomingMessage message)
+    {
+        _ = ProcessMessageInBackgroundAsync(message);
+        return Task.CompletedTask;
+    }
+
+    private async Task ProcessMessageInBackgroundAsync(IncomingMessage message)
     {
         try
         {
+            using var logScope = _logger.BeginScope(new Dictionary<string, object?>
+            {
+                ["CorrelationId"] = message.CorrelationId,
+                ["Platform"] = message.Platform,
+                ["ChatId"] = message.ChatId,
+                ["UserId"] = message.UserId
+            });
+
             using var scope = _scopeFactory.CreateScope();
             var dispatcher = scope.ServiceProvider.GetRequiredService<ICommandDispatcher>();
-            await dispatcher.DispatchAsync(message, _adapter, _stoppingToken);
+            await dispatcher.DispatchAsync(message, _adapter, _stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_stoppingToken.IsCancellationRequested)
+        {
+            // Штатная отмена при остановке хоста
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Ошибка при выполнении команды (Platform=Max)");
+            _logger.LogError(ex, "Ошибка при выполнении команды (Platform=Max, CorrelationId={CorrelationId})", message.CorrelationId);
         }
     }
 
@@ -69,38 +88,56 @@ public sealed class MaxPollingWorker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _stoppingToken = stoppingToken;
-        while (!stoppingToken.IsCancellationRequested)
+
+        try
         {
-            try
-            {
-                await _client.Updates.PollUpdatesWithCallback(
-                    callback: async (update, client) => await _adapter.HandleUpdateAsync(update),
-                    limit: 100,
-                    timeout: 90,
-                    types: new List<string>
-                    {
-                        UpdateTypes.MessageCreated,
-                        UpdateTypes.MessageCallback,
-                        UpdateTypes.BotStarted
-                    },
-                    cancellationToken: stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка соединения MAX API в Polling Worker. Повтор через 5 секунд...");
-                try
+            await _client.Updates.PollUpdatesWithCallback(
+                callback: (update, _) => _adapter.HandleUpdateAsync(update),
+                limit: 100,
+                timeout: 25,
+                marker: null,
+                types: new List<string>
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-            }
+                    UpdateTypes.MessageCreated,
+                    UpdateTypes.MessageCallback,
+                    UpdateTypes.BotStarted,
+                    UpdateTypes.MessageEdited,
+                    UpdateTypes.CommentCreated
+                },
+                parallelProcessing: true,
+                cancellationToken: stoppingToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Корректная остановка сервиса.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "MAX polling worker неожиданно завершился");
+            throw;
+        }
+    }
+
+    private Task HandlePollingErrorAsync(Exception exception)
+    {
+        _logger.LogWarning(
+            exception,
+            "Ошибка соединения MAX API. SDK выполнит повтор с экспоненциальной задержкой");
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _client.StopPollingAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Подавление ошибок завершения опроса
+        }
+
+        await base.StopAsync(cancellationToken).ConfigureAwait(false);
     }
 }

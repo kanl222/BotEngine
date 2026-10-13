@@ -29,7 +29,7 @@ public static class DependencyInjection
             var token = config["Max:Token"]
                 ?? throw new InvalidOperationException("Max:Token не задан. Добавьте его в конфигурацию.");
 
-            var timeoutSeconds = 30;
+            var timeoutSeconds = 60;
             if (int.TryParse(config["Max:TimeoutSeconds"], out var parsedTimeout))
             {
                 timeoutSeconds = parsedTimeout;
@@ -42,7 +42,7 @@ public static class DependencyInjection
                 client.DefaultRequestHeaders.Add("Authorization", token);
             }
 
-            client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
+            client.Timeout = TimeSpan.FromSeconds(Math.Max(timeoutSeconds, 60));
         });
 
         services.AddSingleton<MAX.Bot.Interfaces.IMaxBotClient>(sp =>
@@ -72,7 +72,7 @@ public static class DependencyInjection
         var token = config["Max:Token"]
             ?? throw new InvalidOperationException("Max:Token не задан. Добавьте его в конфигурацию.");
 
-        var timeoutSeconds = 30;
+        var timeoutSeconds = 60;
         if (int.TryParse(config["Max:TimeoutSeconds"], out var parsedTimeout))
         {
             timeoutSeconds = parsedTimeout;
@@ -82,24 +82,7 @@ public static class DependencyInjection
         services.AddSingleton<IMessagingPlatform>(sp => sp.GetRequiredService<MaxPlatformAdapter>());
         services.AddKeyedSingleton<IMessagingPlatform>("Max", (sp, _) => sp.GetRequiredService<MaxPlatformAdapter>());
 
-        services.AddHttpClient("MaxBot", (sp, client) =>
-        {
-            client.BaseAddress = new Uri(MAX.Bot.MaxBotClient.BaseUrl);
-
-            if (!string.IsNullOrWhiteSpace(token))
-            {
-                client.DefaultRequestHeaders.Add("Authorization", token);
-            }
-
-            client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
-        });
-
-        services.AddSingleton<MAX.Bot.Interfaces.IMaxBotClient>(sp =>
-        {
-            var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
-            var httpClient = httpClientFactory.CreateClient("MaxBot");
-            return new MAX.Bot.MaxBotClient(token, httpClient);
-        });
+        services.AddMaxBotClient(token, timeoutSeconds: Math.Max(timeoutSeconds, 60));
 
         services.AddHostedService<MaxPollingWorker>();
 

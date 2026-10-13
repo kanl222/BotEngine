@@ -21,15 +21,17 @@ COPY ["BotEngine.Example/BotEngine.Example.csproj", "BotEngine.Example/"]
 COPY ["BotEngine.Core/BotEngine.Core.csproj", "BotEngine.Core/"]
 COPY ["BotEngine.Telegram/BotEngine.Telegram.csproj", "BotEngine.Telegram/"]
 COPY ["BotEngine.Max/BotEngine.Max.csproj", "BotEngine.Max/"]
+COPY ["external/max-bot-dotnet/MAX.Bot/MAX.Bot.csproj", "external/max-bot-dotnet/MAX.Bot/"]
+COPY ["external/max-bot-dotnet/README.md", "external/max-bot-dotnet/"]
 RUN dotnet restore "BotEngine.Example/BotEngine.Example.csproj"
 
 # Копируем все исходники и собираем приложение
 COPY . .
 WORKDIR "/src/BotEngine.Example"
-RUN dotnet build "BotEngine.Example.csproj" -c Release -o /app/build
+RUN dotnet build "BotEngine.Example.csproj" -c Release -o /app/build --no-restore
 
 FROM build AS publish
-RUN dotnet publish "BotEngine.Example.csproj" -c Release -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "BotEngine.Example.csproj" -c Release -o /app/publish /p:UseAppHost=false --no-restore
 
 FROM base AS final
 WORKDIR /app

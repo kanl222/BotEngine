@@ -12,6 +12,7 @@ services:
       # Telegram__Token переопределит Telegram:Token из appsettings.json
       - Telegram__Token=${TELEGRAM_TOKEN}
       - Max__Token=${MAX_TOKEN}
+      - BotEngine__InstanceId=${BOT_INSTANCE_ID:-botengine-example}
       - DOTNET_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
       # - ConnectionStrings__Redis=${REDIS_CONNECTION_STRING}
     # Раскомментируйте depends_on, если планируете использовать Redis
