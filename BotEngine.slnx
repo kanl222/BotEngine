@@ -2,6 +2,6 @@
   <Project Path="BotEngine.Max/BotEngine.Max.csproj" />
   <Project Path="BotEngine.Telegram/BotEngine.Telegram.csproj" />
   <Project Path="BotEngine.Core/BotEngine.Core.csproj" />
+  <Project Path="BotEngine.Core.Tests/BotEngine.Core.Tests.csproj" />
   <Project Path="BotEngine.Example/BotEngine.Example.csproj" />
-  <Project Path="external/max-bot-dotnet/MAX.Bot/MAX.Bot.csproj" />
 </Solution>

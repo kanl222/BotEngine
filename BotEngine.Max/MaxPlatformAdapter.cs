@@ -282,6 +282,7 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
     /// <remarks>
     /// Восстанавливает объект вложения по метаданным <see cref="BotFile"/> и
     /// скачивает его во временный файл или напрямую в память через MAX SDK.
+    /// Использует защитный таймаут для предотвращения зависания при обрыве соединения.
     /// </remarks>
     /// <exception cref="InvalidOperationException">Выбрасывается, если вложение не удалось скачать или прочитать.</exception>
     public async Task<Stream> DownloadFileAsync(BotFile file, CancellationToken ct = default)
@@ -292,9 +293,14 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
         // Для этого нужно восстановить объект Attachment из BotFile.
         var attachment = ReconstructAttachment(file);
 
+        var options = new DownloadAttachmentOptions
+        {
+            DownloadTimeout = TimeSpan.FromSeconds(60)
+        };
+
         var result = await _client.Attachments.DownloadAttachmentAsync(
             attachment,
-            options: null,
+            options: options,
             cancellationToken: ct).ConfigureAwait(false);
 
         if (result.Content is { Length: > 0 })
@@ -307,10 +313,59 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
             $"MAX SDK не вернул содержимое файла для BotFile(FileId={file.FileId})");
     }
 
+    // ── Подтверждение Callback ───────────────────────────────────────────
+
+    /// <summary>
+    /// Подтверждает получение callback-запроса от inline-кнопки, чтобы клиент MAX снял индикатор ожидания.
+    /// </summary>
+    /// <param name="callbackId">Идентификатор callback-запроса.</param>
+    /// <param name="notification">Текст одноразового всплывающего уведомления (опционально).</param>
+    /// <param name="ct">Токен отмены операции.</param>
+    public async Task AcknowledgeCallbackAsync(string callbackId, string? notification = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(callbackId))
+            return;
+
+        try
+        {
+            var request = new AnswerCallbackRequest
+            {
+                CallbackId = callbackId,
+                Notification = !string.IsNullOrWhiteSpace(notification) ? notification : "OK"
+            };
+
+            await _client.Messages.AnswerCallbackAsync(request, cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Не удалось подтвердить callback {CallbackId} в MAX API", callbackId);
+        }
+    }
+
+    /// <summary>
+    /// Подтверждает получение callback-запроса по объекту входящего обновления.
+    /// Безопасно вызывать для любого обновления — не-callback события игнорируются.
+    /// </summary>
+    /// <param name="update">Обновление MAX API.</param>
+    /// <param name="notification">Текст одноразового всплывающего уведомления (опционально).</param>
+    /// <param name="ct">Токен отмены операции.</param>
+    public Task AcknowledgeCallbackAsync(Update update, string? notification = null, CancellationToken ct = default)
+    {
+        if (update is MessageCallbackUpdate callbackUpdate &&
+            callbackUpdate.Callback?.CallbackId is { } callbackId &&
+            !string.IsNullOrWhiteSpace(callbackId))
+        {
+            return AcknowledgeCallbackAsync(callbackId, notification, ct);
+        }
+
+        return Task.CompletedTask;
+    }
+
     // ── Обработка входящих обновлений ─────────────────────────────────────
 
     /// <summary>
     /// Обрабатывает входящее низкоуровневое обновление MAX API, конвертирует его и передает обработчикам.
+    /// Автоматически квитирует callback-кнопки для предотвращения блокировки клиентского интерфейса.
     /// </summary>
     /// <param name="update">Объект входящего обновления.</param>
     /// <returns>Задача обработки обновления.</returns>
@@ -318,16 +373,46 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
     {
         try
         {
+            // Снимаем блокировку со спиннера кнопки в клиенте MAX
+            if (update is MessageCallbackUpdate callbackUpdate &&
+                callbackUpdate.Callback?.CallbackId is { } callbackId &&
+                !string.IsNullOrWhiteSpace(callbackId))
+            {
+                await AcknowledgeCallbackAsync(callbackId, ct: CancellationToken.None).ConfigureAwait(false);
+            }
+
             var incoming = MapUpdate(update);
             if (incoming is null)
                 return;
 
-            if (OnMessageReceived is { } handler)
-                await handler.Invoke(incoming).ConfigureAwait(false);
+            await RaiseOnMessageReceivedAsync(incoming).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Ошибка при обработке события MAX update ({UpdateType})", update?.UpdateType);
+        }
+    }
+
+    /// <summary>
+    /// Безопасно вызывает всех подписчиков события <see cref="OnMessageReceived"/>,
+    /// гарантируя корректное ожидание каждой задачи и изоляцию исключений.
+    /// </summary>
+    private async Task RaiseOnMessageReceivedAsync(IncomingMessage message)
+    {
+        var handler = OnMessageReceived;
+        if (handler is null)
+            return;
+
+        foreach (var d in handler.GetInvocationList())
+        {
+            try
+            {
+                await ((Func<IncomingMessage, Task>)d)(message).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка в обработчике события OnMessageReceived (CorrelationId={CorrelationId})", message.CorrelationId);
+            }
         }
     }
 
@@ -338,15 +423,18 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
     /// </summary>
     /// <param name="update">Входящее обновление.</param>
     /// <returns>Платформо-независимое сообщение или null, если тип обновления не поддерживается.</returns>
-    private IncomingMessage? MapUpdate(Update update)
+    public IncomingMessage? MapUpdate(Update update)
     {
         return update switch
         {
             MessageCreatedUpdate created when created.Message?.Recipient is { ChatId: var chatId } =>
-                BuildIncomingMessage(created.Message, chatId),
+                BuildIncomingMessage(update, created.Message, chatId),
 
             MessageEditedUpdate edited when edited.Message?.Recipient is { ChatId: var chatId } =>
-                BuildIncomingMessage(edited.Message, chatId),
+                BuildIncomingMessage(update, edited.Message, chatId),
+
+            CommentCreatedUpdate commentCreated when commentCreated.Message?.Recipient is { ChatId: var chatId } =>
+                BuildIncomingMessage(update, commentCreated.Message, chatId),
 
             MessageCallbackUpdate callbackUpdate when callbackUpdate.Callback?.Payload is { } payload =>
                 new IncomingMessage(
@@ -357,7 +445,10 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
                     Text: payload,
                     CallbackData: payload,
                     Platform: "Max",
-                    MessageId: callbackUpdate.Message?.Body?.Mid),
+                    MessageId: callbackUpdate.Message?.Body?.Mid)
+                {
+                    CorrelationId = BuildCorrelationId(update, callbackUpdate.Message?.Body?.Mid)
+                },
 
             BotStartedUpdate botStarted =>
                 new IncomingMessage(
@@ -365,7 +456,10 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
                     UserId: botStarted.User?.Id.ToString() ?? botStarted.ChatId.ToString(),
                     Text: "/start",
                     CallbackData: string.IsNullOrWhiteSpace(botStarted.Payload) ? null : botStarted.Payload,
-                    Platform: "Max"),
+                    Platform: "Max")
+                {
+                    CorrelationId = BuildCorrelationId(update)
+                },
 
             _ => null
         };
@@ -373,9 +467,9 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
 
     /// <summary>
     /// Строит <see cref="IncomingMessage"/> из объекта сообщения MAX API (общая логика
-    /// для событий создания и редактирования сообщения).
+    /// для событий создания, редактирования сообщения и комментариев).
     /// </summary>
-    private static IncomingMessage BuildIncomingMessage(Message? message, long chatId) =>
+    private static IncomingMessage BuildIncomingMessage(Update update, Message? message, long chatId) =>
         new IncomingMessage(
             ChatId: chatId.ToString(),
             UserId: message?.Sender?.Id.ToString() ?? chatId.ToString(),
@@ -384,8 +478,14 @@ public sealed class MaxPlatformAdapter : IMessagingPlatform
             Platform: "Max",
             MessageId: message?.Body?.Mid)
         {
-            Files = MapAttachments(message?.Body?.Attachments)
+            Files = MapAttachments(message?.Body?.Attachments),
+            CorrelationId = BuildCorrelationId(update, message?.Body?.Mid)
         };
+
+    private static string BuildCorrelationId(Update update, string? messageId = null) =>
+        string.IsNullOrWhiteSpace(messageId)
+            ? $"max:{update.Timestamp}:{update.UpdateType}"
+            : $"max:{update.Timestamp}:{messageId}";
 
     // ── Вспомогательные методы ─────────────────────────────────────────────
 

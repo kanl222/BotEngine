@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify submodules
+        shell: bash
+        run: |
+          test -f external/max-bot-dotnet/MAX.Bot/MAX.Bot.csproj
+          status="$(git submodule status --recursive)"
+          printf '%s\n' "$status"
+          if printf '%s\n' "$status" | grep -Eq '^[+-U]'; then
+            echo "A submodule is missing, modified, or checked out at the wrong commit." >&2
+            exit 1
+          fi
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore BotEngine.slnx
+
+      - name: Build
+        run: dotnet build BotEngine.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test BotEngine.Core.Tests/BotEngine.Core.Tests.csproj --configuration Release --no-build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify submodule project
+        run: test -f external/max-bot-dotnet/MAX.Bot/MAX.Bot.csproj
+
+      - name: Build example image
+        run: docker build --file BotEngine.Example/Dockerfile --tag botengine-example:ci .

@@ -1,6 +1,5 @@
 using BotEngine.Core.Interfaces;
 using BotEngine.Core.Models;
-using BotEngine.Core.Services;
 using MAX.Bot.Interfaces;
 using MAX.Bot.Interfaces.Models;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,11 +21,10 @@ public sealed class MaxPollingWorker : BackgroundService
     {
         UpdateTypes.MessageCreated,
         UpdateTypes.MessageCallback,
-        UpdateTypes.BotStarted
+        UpdateTypes.BotStarted,
+        UpdateTypes.MessageEdited,
+        UpdateTypes.CommentCreated
     };
-
-    private static readonly TimeSpan MinReconnectDelay = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan MaxReconnectDelay = TimeSpan.FromMinutes(1);
 
     private readonly IMaxBotClient _client;
     private readonly MaxPlatformAdapter _adapter;
@@ -53,28 +51,44 @@ public sealed class MaxPollingWorker : BackgroundService
         _logger = logger;
 
         _adapter.OnMessageReceived += HandleMessageAsync;
+        _client.Updates.OnPollingError += HandlePollingErrorAsync;
     }
 
     /// <summary>
     /// Обрабатывает входящее платформо-независимое сообщение от пользователя.
+    /// Запускает диспетчеризацию изолированно в пуле задач, исключая Head-of-Line Blocking очереди обновлений.
     /// </summary>
     /// <param name="message">Входящее сообщение.</param>
-    /// <returns>Задача обработки сообщения.</returns>
-    private async Task HandleMessageAsync(IncomingMessage message)
+    /// <returns>Завершённая задача.</returns>
+    private Task HandleMessageAsync(IncomingMessage message)
+    {
+        _ = ProcessMessageInBackgroundAsync(message);
+        return Task.CompletedTask;
+    }
+
+    private async Task ProcessMessageInBackgroundAsync(IncomingMessage message)
     {
         try
         {
+            using var logScope = _logger.BeginScope(new Dictionary<string, object?>
+            {
+                ["CorrelationId"] = message.CorrelationId,
+                ["Platform"] = message.Platform,
+                ["ChatId"] = message.ChatId,
+                ["UserId"] = message.UserId
+            });
+
             using var scope = _scopeFactory.CreateScope();
             var dispatcher = scope.ServiceProvider.GetRequiredService<ICommandDispatcher>();
             await dispatcher.DispatchAsync(message, _adapter, _stoppingToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (_stoppingToken.IsCancellationRequested)
         {
-            // Сервис останавливается — не считаем это ошибкой обработки команды.
+            // Штатная отмена при остановке хоста
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Ошибка при выполнении команды (Platform=Max, ChatId={ChatId})", message.ChatId);
+            _logger.LogError(ex, "Ошибка при выполнении команды (Platform=Max, CorrelationId={CorrelationId}, ChatId={ChatId})", message.CorrelationId, message.ChatId);
         }
     }
 
@@ -86,49 +100,57 @@ public sealed class MaxPollingWorker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _stoppingToken = stoppingToken;
-        var reconnectDelay = MinReconnectDelay;
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
-            {
-                await _client.Updates.PollUpdatesWithCallback(
-                    callback: async (update, client) => await _adapter.HandleUpdateAsync(update, stoppingToken).ConfigureAwait(false),
-                    limit: 100,
-                    timeout: 90,
-                    types: SubscribedUpdateTypes,
-                    cancellationToken: stoppingToken).ConfigureAwait(false);
-
-                // Успешный цикл опроса — сбрасываем задержку переподключения.
-                reconnectDelay = MinReconnectDelay;
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка соединения MAX API в Polling Worker. Повтор через {Delay}...", reconnectDelay);
-                try
-                {
-                    await Task.Delay(reconnectDelay, stoppingToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-
-                // Экспоненциальный backoff с ограничением сверху, чтобы не заваливать API
-                // запросами при продолжительной недоступности, но и не ждать бесконечно долго.
-                reconnectDelay = TimeSpan.FromSeconds(Math.Min(reconnectDelay.TotalSeconds * 2, MaxReconnectDelay.TotalSeconds));
-            }
+            await _client.Updates.PollUpdatesWithCallback(
+                callback: (update, _) => _adapter.HandleUpdateAsync(update),
+                limit: 100,
+                timeout: 25,
+                marker: null,
+                types: SubscribedUpdateTypes,
+                parallelProcessing: true,
+                cancellationToken: stoppingToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Корректная остановка сервиса.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "MAX polling worker неожиданно завершился");
+            throw;
+        }
+    }
+
+    private Task HandlePollingErrorAsync(Exception exception)
+    {
+        _logger.LogWarning(
+            exception,
+            "Ошибка соединения MAX API. SDK выполнит повтор с экспоненциальной задержкой");
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _client.StopPollingAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Подавление ошибок завершения опроса
+        }
+
+        await base.StopAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public override void Dispose()
     {
         _adapter.OnMessageReceived -= HandleMessageAsync;
+        _client.Updates.OnPollingError -= HandlePollingErrorAsync;
         base.Dispose();
     }
 }

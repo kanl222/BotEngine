@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using BotEngine.Core.Diagnostics;
 using BotEngine.Core.Interfaces;
 using BotEngine.Core.Models;
 using Microsoft.Extensions.Logging;
@@ -12,35 +14,58 @@ public sealed class CommandDispatcher : ICommandDispatcher
 {
     private readonly ICommandFactory _factory;
     private readonly IUserSessionStore _sessions;
+    private readonly ISessionKeyProvider _sessionKeys;
     private readonly IEnumerable<IBotMiddleware> _middlewares;
     private readonly ILogger<CommandDispatcher> _logger;
 
     public CommandDispatcher(
         ICommandFactory factory,
         IUserSessionStore sessions,
+        ISessionKeyProvider sessionKeys,
         IEnumerable<IBotMiddleware> middlewares,
         ILogger<CommandDispatcher> logger)
     {
         _factory = factory;
         _sessions = sessions;
+        _sessionKeys = sessionKeys;
         _middlewares = middlewares;
         _logger = logger;
     }
 
     public async Task DispatchAsync(IncomingMessage message, IMessagingPlatform platform, CancellationToken ct = default)
     {
-        // Построение конвейера Middleware
-        var middlewareList = _middlewares.ToList();
-        BotMiddlewareDelegate targetPipeline = (msg, plt, token) => ExecuteCoreDispatchAsync(msg, plt, token);
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(platform);
 
-        for (int i = middlewareList.Count - 1; i >= 0; i--)
+        using var activity = BotEngineDiagnostics.StartDispatch(message);
+        var startedAt = Stopwatch.GetTimestamp();
+
+        try
         {
-            var middleware = middlewareList[i];
-            var next = targetPipeline;
-            targetPipeline = (msg, plt, token) => middleware.InvokeAsync(msg, plt, next, token);
-        }
+            var middlewareList = _middlewares.ToList();
+            BotMiddlewareDelegate targetPipeline = (msg, plt, token) => ExecuteCoreDispatchAsync(msg, plt, token);
 
-        await targetPipeline(message, platform, ct);
+            for (var i = middlewareList.Count - 1; i >= 0; i--)
+            {
+                var middleware = middlewareList[i];
+                var next = targetPipeline;
+                targetPipeline = (msg, plt, token) => middleware.InvokeAsync(msg, plt, next, token);
+            }
+
+            await targetPipeline(message, platform, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
+            throw;
+        }
+        finally
+        {
+            BotEngineDiagnostics.RecordDispatchDuration(
+                message.Platform,
+                Stopwatch.GetElapsedTime(startedAt));
+        }
     }
 
     private async Task ExecuteCoreDispatchAsync(IncomingMessage message, IMessagingPlatform platform, CancellationToken ct)
@@ -50,12 +75,24 @@ public sealed class CommandDispatcher : ICommandDispatcher
             UserId: message.UserId,
             Platform: message.Platform,
             MessagingPlatform: platform,
-            Sessions: _sessions);
+            Sessions: _sessions)
+        {
+            SessionKey = _sessionKeys.Create(message)
+        };
 
-        _logger.LogDebug(
-            "Маршрутизация сообщения: Platform={Platform}, HasText={HasText}, HasCallback={HasCallback}",
-            message.Platform,
-            !string.IsNullOrEmpty(message.Text), !string.IsNullOrEmpty(message.CallbackData));
+        using var logScope = _logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["CorrelationId"] = message.CorrelationId,
+            ["Platform"] = message.Platform,
+            ["ChatId"] = message.ChatId,
+            ["UserId"] = message.UserId
+        });
+
+        _logger.LogInformation(
+            "Маршрутизация сообщения: TextLength={TextLength}, HasCallback={HasCallback}, FileCount={FileCount}",
+            message.Text?.Length ?? 0,
+            !string.IsNullOrEmpty(message.CallbackData),
+            message.Files.Count);
 
         // 1. Обработка CallbackData (от нажатия Inline-кнопок)
         if (!string.IsNullOrEmpty(message.CallbackData))
@@ -64,66 +101,85 @@ public sealed class CommandDispatcher : ICommandDispatcher
             var command = _factory.Resolve(commandKey);
             if (command is not null)
             {
-                await ExecuteSafeAsync(command, context, message, ct);
+                BotEngineDiagnostics.RecordRoute(message.Platform, "callback");
+                await ExecuteSafeAsync(command, context, message, ct).ConfigureAwait(false);
                 return;
             }
 
             _logger.LogWarning("Неизвестный ключ callback-команды: '{Key}' (платформа: {Platform})", commandKey, message.Platform);
-            await platform.SendTextAsync(message.ChatId, "Неизвестное действие. Нажмите /start для главного меню.", ct: ct);
+            await platform.SendTextAsync(message.ChatId, "Неизвестное действие. Нажмите /start для главного меню.", ct: ct).ConfigureAwait(false);
             return;
         }
 
-        // 2. Явные slash-команды имеют приоритет над активным диалогом.
-        // Это позволяет в любой момент выполнить /start и выйти из зависшего сценария.
+        // 2. Явная slash-команда имеет приоритет над активным диалогом.
         var text = message.Text?.Trim() ?? string.Empty;
-        var commandName = text.StartsWith('/') ? text[1..] : text;
-        var spaceIdx = commandName.IndexOf(' ');
-        if (spaceIdx > 0) commandName = commandName[..spaceIdx];
-        commandName = commandName.ToLowerInvariant();
-
-        if (text.StartsWith('/') && !string.IsNullOrEmpty(commandName))
+        var explicitCommandName = ParseExplicitCommand(text);
+        if (explicitCommandName is not null)
         {
-            var namedCommand = _factory.Resolve(commandName);
+            var namedCommand = _factory.Resolve(explicitCommandName);
             if (namedCommand is not null)
             {
-                await ExecuteSafeAsync(namedCommand, context, message, ct);
+                BotEngineDiagnostics.RecordRoute(message.Platform, "explicit");
+                await ExecuteSafeAsync(namedCommand, context, message, ct).ConfigureAwait(false);
                 return;
             }
         }
 
         // 3. Проверка активных сессий пользователя
-        var sessionState = await _sessions.GetStateAsync(context.SessionKey, ct);
+        var sessionState = await _sessions.GetStateAsync(context.SessionKey, ct).ConfigureAwait(false);
         if (sessionState is { } state)
         {
             var sessionCommandKey = state.AwaitingInputFor.Trim().ToLowerInvariant();
             var sessionCommand = _factory.Resolve(sessionCommandKey);
             if (sessionCommand is not null)
             {
-                await ExecuteSafeAsync(sessionCommand, context, message, ct);
+                BotEngineDiagnostics.RecordRoute(message.Platform, "session");
+                await ExecuteSafeAsync(sessionCommand, context, message, ct).ConfigureAwait(false);
                 return;
             }
 
             _logger.LogWarning("Сессия ссылается на неизвестную команду '{Key}'. Очистка устаревшей сессии.", sessionCommandKey);
-            await _sessions.ClearStateAsync(context.SessionKey, ct);
+            await _sessions.ClearStateAsync(context.SessionKey, ct).ConfigureAwait(false);
         }
 
         // 4. Фолбэк для естественного языка — отправляем в RAG-команду ("ask" или "default")
         var defaultCommand = _factory.Resolve("ask") ?? _factory.Resolve("default");
         if (defaultCommand is not null)
         {
-            await ExecuteSafeAsync(defaultCommand, context, message, ct);
+            BotEngineDiagnostics.RecordRoute(message.Platform, "fallback");
+            await ExecuteSafeAsync(defaultCommand, context, message, ct).ConfigureAwait(false);
             return;
         }
 
-        _logger.LogWarning("Обработчик для сообщения не найден (UserId: {UserId}, Platform: {Platform}): '{Text}'", message.UserId, message.Platform, message.Text);
-        await platform.SendTextAsync(message.ChatId, "Команда не распознана. Воспользуйтесь /start для вызова главного меню.", ct: ct);
+        _logger.LogWarning(
+            "Обработчик для сообщения не найден: TextLength={TextLength}",
+            message.Text?.Length ?? 0);
+        await platform.SendTextAsync(message.ChatId, "Команда не распознана. Воспользуйтесь /start для вызова главного меню.", ct: ct).ConfigureAwait(false);
+    }
+
+    private static string? ParseExplicitCommand(string text)
+    {
+        if (!text.StartsWith('/'))
+            return null;
+
+        var token = text[1..];
+        var whitespaceIndex = token.IndexOfAny([' ', '\t', '\r', '\n']);
+        if (whitespaceIndex >= 0)
+            token = token[..whitespaceIndex];
+
+        var botSuffixIndex = token.IndexOf('@');
+        if (botSuffixIndex >= 0)
+            token = token[..botSuffixIndex];
+
+        token = token.Trim();
+        return token.Length == 0 ? null : token.ToLowerInvariant();
     }
 
     private async Task ExecuteSafeAsync(IBotCommand command, BotContext context, IncomingMessage message, CancellationToken ct)
     {
         try
         {
-            await command.ExecuteAsync(context, message, ct);
+            await command.ExecuteAsync(context, message, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -131,11 +187,12 @@ public sealed class CommandDispatcher : ICommandDispatcher
         }
         catch (Exception ex)
         {
+            BotEngineDiagnostics.RecordCommandFailure(message.Platform, command.Name, ex);
             _logger.LogError(ex, "Необработанное исключение в команде '{CommandName}' (Platform={Platform}, UserId={UserId})",
                 command.Name, message.Platform, message.UserId);
             try
             {
-                await context.ReplyAsync("Произошла внутренняя ошибка. Попробуйте позже.", ct: ct);
+                await context.ReplyAsync("Произошла внутренняя ошибка. Попробуйте позже.", ct: ct).ConfigureAwait(false);
             }
             catch
             {

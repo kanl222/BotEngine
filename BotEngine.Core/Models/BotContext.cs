@@ -9,10 +9,16 @@ public record BotContext(
     IMessagingPlatform MessagingPlatform,
     IUserSessionStore Sessions)
 {
-        /// <summary>
-    /// Уникальный ключ сессии с изоляцией по платформе (исключает межплатформенные коллизии).
+    /// <summary>
+    /// Ключ сессии. Диспетчер задаёт его через <see cref="ISessionKeyProvider"/>;
+    /// значение по умолчанию сохраняет корректную изоляцию для вручную созданного контекста.
     /// </summary>
-    public string SessionKey => $"{Platform}:{UserId}".ToLowerInvariant();
+    public string SessionKey { get; init; } = string.Join(':',
+        "v2",
+        "default",
+        Uri.EscapeDataString(Platform.Trim().ToLowerInvariant()),
+        Uri.EscapeDataString(ChatId.Trim()),
+        Uri.EscapeDataString(UserId.Trim()));
 
 
     // ── Текстовые сообщения ────────────────────────────────────────────────

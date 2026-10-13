@@ -100,6 +100,14 @@ public sealed class TelegramPollingWorker : BackgroundService
             // индикатор ожидания на кнопке — не дожидаясь завершения диспетчеризации команды.
             await _adapter.AcknowledgeCallbackAsync(update).ConfigureAwait(false);
 
+            using var logScope = _logger.BeginScope(new Dictionary<string, object?>
+            {
+                ["CorrelationId"] = incoming.CorrelationId,
+                ["Platform"] = incoming.Platform,
+                ["ChatId"] = incoming.ChatId,
+                ["UserId"] = incoming.UserId
+            });
+
             using var scope = _scopeFactory.CreateScope();
             var dispatcher = scope.ServiceProvider.GetRequiredService<ICommandDispatcher>();
 
